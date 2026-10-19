@@ -5,6 +5,8 @@ struct BookCover: View {
     let book: Book
     let width: CGFloat
 
+    private var cornerRadius: CGFloat { width < 72 ? 3 : 6 }
+
     private static let colors: [UInt32] = [
         0x40594E, 0x44566D, 0x8E5651, 0x7C694F,
         0x3E6168, 0x67576B, 0x686C50, 0x70534C
@@ -42,9 +44,9 @@ struct BookCover: View {
         .padding(.horizontal, width * 0.14)
         .padding(.vertical, width * 0.17)
         .frame(width: width, height: width * 1.48)
-        .background(coverColor, in: RoundedRectangle(cornerRadius: 2))
+        .background(coverColor, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 2)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(.black.opacity(0.08), lineWidth: 0.5)
         }
         .accessibilityHidden(true)
