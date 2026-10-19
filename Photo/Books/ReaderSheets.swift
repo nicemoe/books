@@ -49,12 +49,14 @@ struct ChapterListSheet: View {
                 if tab == 0 { chapterList } else { bookmarkList }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(Theme.background)
+            .background(Theme.background.ignoresSafeArea())
             // 认不出章节的书别报章数——那个数是内部分了几片，不是书有几章
             .navigationTitle(tab == 0
                              ? (book.hasRealChapters ? "共 \(book.chapterCount) 章" : "目录")
                              : "书签")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if tab == 0 {
@@ -66,6 +68,7 @@ struct ChapterListSheet: View {
                 }
             }
         }
+        .presentationBackground(Theme.background)
     }
 
     private var bookmarkList: some View {
@@ -102,7 +105,7 @@ struct ChapterListSheet: View {
                             }
                             .tappableArea()
                         }
-                        .listRowBackground(Theme.surface)
+                        .listRowBackground(Theme.background)
                     }
                     .onDelete { offsets in
                         for index in offsets {
@@ -136,7 +139,7 @@ struct ChapterListSheet: View {
                             }
                             .tappableArea()
                         }
-                        .listRowBackground(Theme.surface)
+                        .listRowBackground(Theme.background)
                         .id(chapter.index)
                     }
                 }
