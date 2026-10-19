@@ -153,9 +153,12 @@ final class WiFiService {
                 return .error("请求格式不正确")
             }
             let body = request.body
-            let parts = await Task.detached(priority: .userInitiated) {
-                Multipart.parse(body: body, boundary: boundary)
-            }.value
+            let parts: [MultipartPart]
+            do {
+                parts = try await Task.detached(priority: .userInitiated) {
+                    try Multipart.parse(body: body, boundary: boundary)
+                }.value
+            } catch { return .error(error.localizedDescription) }
 
             var saved = 0
             var failure: String?

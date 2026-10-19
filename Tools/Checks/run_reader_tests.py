@@ -53,7 +53,8 @@ def main():
     sources = ['Photo/Books/MiniZip.swift', 'Photo/Books/EpubParser.swift',
                'Photo/Books/TextDecoding.swift', 'Photo/Books/ChapterSplitter.swift',
                'Photo/Books/BookText.swift', 'Photo/Core/Storage.swift',
-               'Photo/Core/SnapshotWriter.swift', 'Tools/Checks/ReaderRegressionTests.swift']
+               'Photo/Core/SnapshotWriter.swift', 'Photo/Server/HTTPTypes.swift',
+               'Tools/Checks/ReaderRegressionTests.swift']
     with tempfile.TemporaryDirectory(prefix='reader-tests-') as temporary:
         output = Path(temporary)
         write_fixtures(output)

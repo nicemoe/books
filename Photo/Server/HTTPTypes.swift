@@ -115,6 +115,11 @@ struct MultipartPart {
 
 enum Multipart {
 
+    enum ParseError: LocalizedError {
+        case malformed
+        var errorDescription: String? { "上传数据不完整或格式损坏，请重新上传" }
+    }
+
     static func boundary(from contentType: String) -> String? {
         for piece in contentType.split(separator: ";") {
             let t = piece.trimmingCharacters(in: .whitespaces)
@@ -129,43 +134,50 @@ enum Multipart {
     }
 
     /// 直接在原始 body 上扫描，不做整份拷贝——上传几十 MB 时多一份副本就可能触发系统回收
-    static func parse(body: Data, boundary: String) -> [MultipartPart] {
+    static func parse(body: Data, boundary: String) throws -> [MultipartPart] {
+        guard !boundary.isEmpty, boundary.utf8.count <= 70,
+              !boundary.contains("\r"), !boundary.contains("\n") else { throw ParseError.malformed }
         let delimiter = Data("\r\n--\(boundary)".utf8)
         let firstDelimiter = Data("--\(boundary)".utf8)
         let crlf = Data("\r\n".utf8)
         let terminator = Data("--".utf8)
 
         // 第一个分隔符前面没有 CRLF，单独找
-        guard let head = body.range(of: firstDelimiter) else { return [] }
+        guard body.starts(with: firstDelimiter) else { throw ParseError.malformed }
 
         var parts: [MultipartPart] = []
-        var segmentStart = head.upperBound
+        var segmentStart = body.startIndex + firstDelimiter.count
 
         while true {
             // 分隔符后紧跟 "--" 表示整体结束
             if segmentStart + 2 <= body.endIndex,
                body[segmentStart..<(segmentStart + 2)] == terminator {
-                break
+                let trailing = body[(segmentStart + 2)...]
+                guard trailing.isEmpty || trailing == crlf else { throw ParseError.malformed }
+                return parts
             }
 
-            var contentStart = segmentStart
-            if contentStart + 2 <= body.endIndex,
-               body[contentStart..<(contentStart + 2)] == crlf {
-                contentStart += 2
+            guard segmentStart + 2 <= body.endIndex,
+                  body[segmentStart..<(segmentStart + 2)] == crlf else { throw ParseError.malformed }
+            let contentStart = segmentStart + 2
+
+            var searchStart = contentStart
+            var nextBoundary: Range<Data.Index>?
+            while let candidate = body.range(of: delimiter, in: searchStart..<body.endIndex) {
+                guard candidate.upperBound + 2 <= body.endIndex else { throw ParseError.malformed }
+                let suffix = body[candidate.upperBound..<(candidate.upperBound + 2)]
+                if suffix == crlf || suffix == terminator {
+                    nextBoundary = candidate
+                    break
+                }
+                searchStart = candidate.upperBound
             }
-
-            guard contentStart <= body.endIndex,
-                  let next = body.range(of: delimiter, in: contentStart..<body.endIndex) else { break }
-
-            if let part = parsePart(Data(body[contentStart..<next.lowerBound])) {
-                parts.append(part)
-            }
-
+            guard let next = nextBoundary,
+                  let part = parsePart(Data(body[contentStart..<next.lowerBound])),
+                  !part.name.isEmpty else { throw ParseError.malformed }
+            parts.append(part)
             segmentStart = next.upperBound
-            if segmentStart >= body.endIndex { break }
         }
-
-        return parts
     }
 
     private static func parsePart(_ segment: Data) -> MultipartPart? {

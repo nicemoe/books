@@ -53,6 +53,19 @@ struct ReaderRegressionTests {
         try expect(ChapterSplitter.split("第一章 开始\n正文一\n\n第二章 继续\n正文二").fromHeadings, "Heading pattern failed")
         print("PASS: Unicode offsets, exact chapter reads, text decoding and author text preservation")
 
+        let uploadText = "正文\r\n--boundary-not-a-separator\r\n结尾"
+        let upload = Data(("--boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"book.txt\"\r\n\r\n"
+            + uploadText + "\r\n--boundary--\r\n").utf8)
+        let parts = try Multipart.parse(body: upload, boundary: "boundary")
+        try expect(parts.count == 1 && parts[0].data == Data(uploadText.utf8), "Multipart text was truncated")
+        try expectFailure("Incomplete upload accepted") {
+            _ = try Multipart.parse(body: Data(upload.dropLast(8)), boundary: "boundary")
+        }
+        try expectFailure("Invalid upload accepted") {
+            _ = try Multipart.parse(body: Data("book text".utf8), boundary: "boundary")
+        }
+        print("PASS: multipart boundary validation and incomplete upload rejection")
+
         let saved = fixtures.appendingPathComponent("snapshots.json")
         let writer = SnapshotWriter(url: saved)
         try await writer.write(Snapshot(value: 2), revision: 2)
