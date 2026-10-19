@@ -417,12 +417,12 @@ struct BookRow: View {
             BookCover(book: book, width: 44)
             VStack(alignment: .leading, spacing: 5) {
                 Text(book.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(Theme.label)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 Text(book.author.isEmpty ? book.sizeText : book.author)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)
                 HStack(spacing: 8) {
@@ -432,7 +432,7 @@ struct BookRow: View {
                             .frame(width: 40)
                     }
                     Text(book.progressText)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(Theme.secondaryLabel)
                 }
             }
