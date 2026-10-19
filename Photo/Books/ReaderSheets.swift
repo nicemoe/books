@@ -48,6 +48,7 @@ struct ChapterListSheet: View {
 
                 if tab == 0 { chapterList } else { bookmarkList }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Theme.background)
             // 认不出章节的书别报章数——那个数是内部分了几片，不是书有几章
             .navigationTitle(tab == 0
@@ -71,8 +72,18 @@ struct ChapterListSheet: View {
         let marks = library.bookmarks(bookID: book.id)
         return Group {
             if marks.isEmpty {
-                EmptyState(title: "还没有书签",
-                           message: "阅读时点右上角的书签图标，就能把当前这页记下来")
+                // 空态只在标签栏下方的剩余区域居中，不能把整个面板一起居中。
+                VStack(spacing: 8) {
+                    Text("还没有书签")
+                        .font(.headline)
+                        .foregroundStyle(Theme.label)
+                    Text("阅读时点右上角的书签图标，就能把当前这页记下来")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryLabel)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 28)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
                     ForEach(marks) { mark in
