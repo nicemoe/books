@@ -105,14 +105,13 @@ struct BookshelfView: View {
                                 Button {
                                     open(book)
                                 } label: {
-                                    BookCard(book: book, side: layout.side)
+                                    BookCard(book: book, side: layout.side) {
+                                        menu(for: book)
+                                    }
                                 }
                                 .buttonStyle(PressableCardStyle())
-                                .contentShape(.contextMenuPreview, BookGridPreviewShape(side: layout.side))
-                                .contextMenu {
+                                .accessibilityActions {
                                     menu(for: book)
-                                } preview: {
-                                    BookContextPreview(book: book)
                                 }
                             }
                         }
@@ -123,14 +122,13 @@ struct BookshelfView: View {
                                 Button {
                                     open(book)
                                 } label: {
-                                    BookRow(book: book)
+                                    BookRow(book: book) {
+                                        menu(for: book)
+                                    }
                                 }
                                 .buttonStyle(PressableCardStyle())
-                                .contentShape(.contextMenuPreview, BookRowPreviewShape())
-                                .contextMenu {
+                                .accessibilityActions {
                                     menu(for: book)
-                                } preview: {
-                                    BookContextPreview(book: book)
                                 }
                             }
                         }
@@ -396,13 +394,20 @@ struct BookshelfView: View {
 
 // MARK: - 书架与书目
 
-struct BookCard: View {
+struct BookCard<MenuItems: View>: View {
     let book: Book
     let side: CGFloat
+    @ViewBuilder var menu: MenuItems
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             BookCover(book: book, width: side * 0.9, height: side * 0.9 * 1.48)
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: side * 0.9 < 72 ? 3 : 6, style: .continuous))
+                .contextMenu {
+                    menu
+                } preview: {
+                    BookContextPreview(book: book)
+                }
             Text(book.title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.label)
@@ -419,12 +424,13 @@ struct BookCard: View {
     }
 }
 
-struct BookRow: View {
+struct BookRow<MenuItems: View>: View {
     let book: Book
+    @ViewBuilder var menu: MenuItems
 
-    static let coverWidth: CGFloat = 44
-    static let verticalPadding: CGFloat = 12
-    private static let textInset: CGFloat = coverWidth + 14
+    private static var coverWidth: CGFloat { 44 }
+    private static var verticalPadding: CGFloat { 12 }
+    private static var textInset: CGFloat { coverWidth + 14 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -455,6 +461,12 @@ struct BookRow: View {
             // 用文字实际高度确定书封高度，随系统字号一起调整。
             GeometryReader { geometry in
                 BookCover(book: book, width: Self.coverWidth, height: geometry.size.height)
+                    .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .contextMenu {
+                        menu
+                    } preview: {
+                        BookContextPreview(book: book)
+                    }
             }
             .frame(width: Self.coverWidth)
         }
