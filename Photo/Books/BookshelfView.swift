@@ -108,7 +108,12 @@ struct BookshelfView: View {
                                     BookCard(book: book, side: layout.side)
                                 }
                                 .buttonStyle(PressableCardStyle())
-                                .contextMenu { menu(for: book) }
+                                .contentShape(.contextMenuPreview, BookGridPreviewShape(side: layout.side))
+                                .contextMenu {
+                                    menu(for: book)
+                                } preview: {
+                                    BookContextPreview(book: book)
+                                }
                             }
                         }
                         if hasMore { loadMoreMarker }
@@ -121,7 +126,12 @@ struct BookshelfView: View {
                                     BookRow(book: book)
                                 }
                                 .buttonStyle(PressableCardStyle())
-                                .contextMenu { menu(for: book) }
+                                .contentShape(.contextMenuPreview, BookRowPreviewShape())
+                                .contextMenu {
+                                    menu(for: book)
+                                } preview: {
+                                    BookContextPreview(book: book)
+                                }
                             }
                         }
                         if hasMore { loadMoreMarker }
@@ -412,6 +422,10 @@ struct BookCard: View {
 struct BookRow: View {
     let book: Book
 
+    static let coverWidth: CGFloat = 44
+    static let verticalPadding: CGFloat = 12
+    private static let textInset: CGFloat = coverWidth + 14
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(book.title)
@@ -436,17 +450,17 @@ struct BookRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
-        .padding(.leading, 58)
+        .padding(.leading, Self.textInset)
         .overlay(alignment: .leading) {
             // 用文字实际高度确定书封高度，随系统字号一起调整。
             GeometryReader { geometry in
-                BookCover(book: book, width: 44, height: geometry.size.height)
+                BookCover(book: book, width: Self.coverWidth, height: geometry.size.height)
             }
-            .frame(width: 44)
+            .frame(width: Self.coverWidth)
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, Self.verticalPadding)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, 58)
+            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, Self.textInset)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
