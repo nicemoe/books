@@ -343,13 +343,7 @@ struct ReaderView: View {
                 }
                 Spacer()
 
-                Button(action: toggleBookmark) {
-                    Image(systemName: currentBookmark == nil ? "bookmark" : "bookmark.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(currentBookmark == nil ? theme.text : Theme.accent)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
-                }
+                bookmarkButton
             }
             .foregroundStyle(theme.text)
             .padding(.horizontal, 18)
@@ -382,6 +376,27 @@ struct ReaderView: View {
             .background(theme.background.opacity(0.98))
         }
         .transition(.opacity)
+    }
+
+    private var bookmarkButton: some View {
+        let isMarked = currentBookmark != nil
+        let color = isMarked
+            ? Color(hex: theme.isDark ? 0xD59080 : 0xA55346)
+            : theme.text.opacity(0.72)
+        return Button(action: toggleBookmark) {
+            BookmarkRibbon()
+                .fill(isMarked ? color : .clear)
+                .overlay {
+                    BookmarkRibbon()
+                        .stroke(color, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+                }
+                .frame(width: 15, height: 22)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isMarked ? "移除书签" : "添加书签")
+        .accessibilityValue(isMarked ? "当前页已收藏" : "当前页未收藏")
     }
 
     private func toolButton(_ title: String, _ icon: String,
@@ -559,5 +574,25 @@ struct ReaderView: View {
               settings.mode == .scroll || pageSource != nil else { return }
         let offset = currentOffset
         library.updateProgress(bookID: bookID, chapterIndex: locator.chapter, characterOffset: offset)
+    }
+}
+
+/// 细长的纸质书签轮廓，顶部微圆角，底部保留剪口。
+private struct BookmarkRibbon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let radius = rect.width * 0.12
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                              control: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - rect.height * 0.22))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                              control: CGPoint(x: rect.minX, y: rect.minY))
+            path.closeSubpath()
+        }
     }
 }
