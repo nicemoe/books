@@ -25,14 +25,14 @@ struct BookshelfView: View {
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
     @State private var keyword = ""
+    @ScaledMetric(relativeTo: .body) private var preferredCoverWidth: CGFloat = 100
     /// 书架上先摆多少本，滑到底再续。见 visibleBooks。
     @State private var shown = BookshelfView.pageSize
 
     private var layout: CardGridLayout {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
         return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
-                              gap: Theme.Metric.cardGap,
-                              preferredItemWidth: 160)
+                              gap: 16, preferredItemWidth: preferredCoverWidth, minimumColumns: 1)
     }
 
     /// 一次往下放多少本。滑到底再续一批。
@@ -58,8 +58,8 @@ struct BookshelfView: View {
         return all.count <= shown ? all : Array(all.prefix(shown))
     }
 
-    /// 后面还有没有。visibleBooks 正好被截到 shown 这么长，就说明还有。
-    private var hasMore: Bool { visibleBooks.count >= shown }
+    /// 匹配结果超过当前显示数量时，才需要继续分页。
+    private var hasMore: Bool { matchedBooks.count > shown }
 
     /// 摆在书架末尾的哨兵：它露头就说明人滑到底了，再放一批出来。
     ///
@@ -100,7 +100,7 @@ struct BookshelfView: View {
                                    message: "试试书名或作者的其他关键词")
                             .padding(.top, 40)
                     } else if library.shelfLayout == .grid {
-                        LazyVGrid(columns: layout.columns, spacing: 22) {
+                        LazyVGrid(columns: layout.columns, alignment: .leading, spacing: 26) {
                             ForEach(visibleBooks) { book in
                                 Button {
                                     open(book)
@@ -113,7 +113,7 @@ struct BookshelfView: View {
                         }
                         if hasMore { loadMoreMarker }
                     } else {
-                        LazyVStack(spacing: 10) {
+                        LazyVStack(spacing: 0) {
                             ForEach(visibleBooks) { book in
                                 Button {
                                     open(book)
@@ -384,114 +384,71 @@ struct BookshelfView: View {
     }
 }
 
-// MARK: - 书卡片
+// MARK: - 书架与书目
 
 struct BookCard: View {
     let book: Book
     let side: CGFloat
 
-    private var tint: Color { Theme.color(at: book.colorIndex) }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // 书封：纯色块 + 书名，扁平风格不做拟物
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous)
-                    .fill(tint.opacity(0.16))
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(book.format.label)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(tint, in: Capsule())
-
-                    Text(book.title)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Theme.label)
-                        .lineLimit(4)
-                        .multilineTextAlignment(.leading)
-
-                    Spacer(minLength: 0)
-
-                    if book.progressRatio > 0 {
-                        ProgressView(value: book.progressRatio)
-                            .tint(tint)
-                            .scaleEffect(x: 1, y: 0.6, anchor: .center)
-                    }
-                }
-                .padding(14)
-            }
-            .frame(width: side, height: side * 1.35)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(book.author.isEmpty ? book.sizeText : book.author)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.label)
-                    .lineLimit(1)
-                Text(book.progressText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondaryLabel)
-                    .lineLimit(1)
-            }
-            .frame(width: side, alignment: .leading)
-            .padding(.top, 9)
+        VStack(alignment: .leading, spacing: 9) {
+            BookCover(book: book, width: side)
+            Text(book.title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Theme.label)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Text(book.progressText)
+                .font(.caption)
+                .foregroundStyle(Theme.secondaryLabel)
         }
-        .frame(width: side)
+        .frame(width: side, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }
-
-// MARK: - 书列表行
 
 struct BookRow: View {
     let book: Book
 
-    private var tint: Color { Theme.color(at: book.colorIndex) }
-
     var body: some View {
-        HStack(spacing: 13) {
-            // 缩小版书封，保持和卡片模式一致的视觉语言
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(tint.opacity(0.18))
-                Text(book.format.label)
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(tint)
-            }
-            .frame(width: 42, height: 56)
-
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: 18) {
+            BookCover(book: book, width: 64)
+            VStack(alignment: .leading, spacing: 7) {
                 Text(book.title)
-                    .font(.system(size: 15.5, weight: .semibold))
+                    .font(.system(.headline, design: .serif))
                     .foregroundStyle(Theme.label)
-                    .lineLimit(1)
-
-                Text(book.author.isEmpty ? book.sizeText : "\(book.author) · \(book.sizeText)")
-                    .font(.system(size: 12.5))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if !book.author.isEmpty {
+                    Text(book.author)
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryLabel)
+                        .lineLimit(1)
+                }
+                Text(book.sizeText)
+                    .font(.caption)
                     .foregroundStyle(Theme.secondaryLabel)
-                    .lineLimit(1)
-
                 HStack(spacing: 8) {
-                    ProgressView(value: book.progressRatio)
-                        .tint(tint)
-                        .scaleEffect(x: 1, y: 0.55, anchor: .center)
-                        .frame(maxWidth: 110)
+                    if book.progressRatio > 0 {
+                        ProgressView(value: book.progressRatio)
+                            .tint(Theme.secondaryLabel)
+                            .frame(width: 54)
+                    }
                     Text(book.progressText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.tertiaryLabel)
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryLabel)
                 }
             }
-
-            Spacer(minLength: 0)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.tertiaryLabel)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(12)
-        .flatCard(radius: 16)
-        .tappableArea()
+        .padding(.vertical, 17)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, 82)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }
 

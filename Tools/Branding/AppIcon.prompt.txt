@@ -1,0 +1,3 @@
+Built-in image_gen; selected and approved by the user. Source composition retained; exports only resized to opaque 1024px AppIcon and 256px WebIcon.
+Use case: logo-brand. Square iOS app icon. Original white ragdoll cat, Japanese anime 2D cel illustration, white background, clean dark slate outlines, light cool gray flat shadows, pink nose and inner ears, natural blue eyes. Simplified fluffy silhouette. No typography, watermark, frame, rounded-square border, mockup, 3D or scenery.
+Book reader: calm white ragdoll cat, three-quarter face, relaxed blue eyes, a paw tucked beneath the cheek.

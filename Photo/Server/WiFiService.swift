@@ -121,8 +121,12 @@ final class WiFiService {
         case ("GET", "/"), ("GET", "/index.html"):
             return .html(WebUI.page)
 
-        case ("GET", "/favicon.ico"):
-            return HTTPResponse(status: 204, headers: [:], body: Data())
+        case ("GET", "/favicon.ico"), ("GET", "/app-icon-ragdoll-v1.png"):
+            guard let url = Bundle.main.url(forResource: "WebIcon", withExtension: "png") else {
+                return .error("网页图标资源缺失", status: 500)
+            }
+            do { return .binary(try Data(contentsOf: url), type: "image/png") }
+            catch { return .error(error.localizedDescription, status: 500) }
 
         case ("GET", "/api/state"):
             return .json(["device": UIDevice.current.name,

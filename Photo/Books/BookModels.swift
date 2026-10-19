@@ -363,14 +363,14 @@ enum ShelfLayout: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .grid: return "卡片"
+        case .grid: return "书封"
         case .list: return "列表"
         }
     }
 
     var icon: String {
         switch self {
-        case .grid: return "square.grid.2x2"
+        case .grid: return "books.vertical"
         case .list: return "list.bullet"
         }
     }
