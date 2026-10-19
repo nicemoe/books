@@ -13,7 +13,7 @@ def check(path):
         size, kind = struct.unpack_from('>I4s', data, offset)
         end = offset + 8 + size
         assert end + 4 <= len(data), 'Truncated web PNG'
-        assert kind != b'CgBI', 'Web icon was converted to Apple CgBI; disable COMPRESS_PNG_FILES'
+        assert kind != b'CgBI', 'Web icon was converted to Apple CgBI; package it as a generic file'
         assert zlib.crc32(data[offset + 4:end]) == struct.unpack_from('>I', data, end)[0], 'PNG CRC mismatch'
         chunks.append(kind)
         if kind == b'IDAT':

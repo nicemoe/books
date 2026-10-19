@@ -373,18 +373,21 @@ struct BookCard<MenuItems: View>: View {
     let book: Book
     let side: CGFloat
     @ViewBuilder var menu: MenuItems
+    @ScaledMetric(relativeTo: .subheadline) private var titleSize: CGFloat = 17
+
+    private var coverWidth: CGFloat { side * 0.96 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            BookCover(book: book, width: side * 0.9, height: side * 0.9 * 1.48)
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: side * 0.9 < 72 ? 3 : 6, style: .continuous))
+            BookCover(book: book, width: coverWidth, height: coverWidth * 1.48)
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: coverWidth < 72 ? 3 : 6, style: .continuous))
                 .contextMenu {
                     menu
                 } preview: {
                     BookContextPreview(book: book)
                 }
             Text(book.title)
-                .font(.subheadline.weight(.medium))
+                .font(.system(size: titleSize, weight: .medium))
                 .foregroundStyle(Theme.label)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -402,15 +405,16 @@ struct BookCard<MenuItems: View>: View {
 struct BookRow<MenuItems: View>: View {
     let book: Book
     @ViewBuilder var menu: MenuItems
+    @ScaledMetric(relativeTo: .callout) private var titleSize: CGFloat = 18
+    @ScaledMetric(relativeTo: .callout) private var coverWidth: CGFloat = 48
 
-    private static var coverWidth: CGFloat { 44 }
     private static var verticalPadding: CGFloat { 12 }
-    private static var textInset: CGFloat { coverWidth + 14 }
+    private var textInset: CGFloat { coverWidth + 14 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(book.title)
-                .font(.callout.weight(.semibold))
+                .font(.system(size: titleSize, weight: .semibold))
                 .foregroundStyle(Theme.label)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -431,23 +435,23 @@ struct BookRow<MenuItems: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
-        .padding(.leading, Self.textInset)
+        .padding(.leading, textInset)
         .overlay(alignment: .leading) {
             // 用文字实际高度确定书封高度，随系统字号一起调整。
             GeometryReader { geometry in
-                BookCover(book: book, width: Self.coverWidth, height: geometry.size.height)
-                    .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 3, style: .continuous))
+                BookCover(book: book, width: coverWidth, height: geometry.size.height)
+                    .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: coverWidth < 72 ? 3 : 6, style: .continuous))
                     .contextMenu {
                         menu
                     } preview: {
                         BookContextPreview(book: book)
                     }
             }
-            .frame(width: Self.coverWidth)
+            .frame(width: coverWidth)
         }
         .padding(.vertical, Self.verticalPadding)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, Self.textInset)
+            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, textInset)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
