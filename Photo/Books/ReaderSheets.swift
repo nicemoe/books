@@ -156,6 +156,8 @@ struct BookSearchSheet: View {
     @State private var hits: [BookLibrary.SearchHit] = []
     @State private var searching = false
     @State private var searched = false
+    @State private var searchTask: Task<Void, Never>?
+    @State private var searchError: String?
 
     var body: some View {
         NavigationStack {
@@ -199,8 +201,15 @@ struct BookSearchSheet: View {
             // 边打边搜会把长篇卡死，等用户停手再搜
             .onSubmit(of: .search) { runSearch() }
             .onChange(of: keyword) { _, value in
-                if value.isEmpty { hits = []; searched = false }
+                searchTask?.cancel()
+                searching = false
+                hits = []
+                searched = false
             }
+            .onDisappear { searchTask?.cancel() }
+            .alert("搜索失败", isPresented: Binding(get: { searchError != nil }, set: { if !$0 { searchError = nil } })) {
+                Button("知道了") { searchError = nil }
+            } message: { Text(searchError ?? "") }
             .navigationTitle(hits.isEmpty ? "全文搜索" : "找到 \(hits.count) 处")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -214,12 +223,21 @@ struct BookSearchSheet: View {
     private func runSearch() {
         let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        searchTask?.cancel()
         searching = true
         searched = true
-        Task {
-            let found = await library.search(fileName: book.sourceName, chapters: chapters, keyword: key)
-            hits = found
-            searching = false
+        searchTask = Task {
+            do {
+                let found = try await library.search(fileName: book.sourceName, chapters: chapters, keyword: key)
+                try Task.checkCancellation()
+                hits = found
+                searching = false
+            } catch is CancellationError { }
+            catch {
+                guard !Task.isCancelled else { return }
+                searchError = error.localizedDescription
+                searching = false
+            }
         }
     }
 }

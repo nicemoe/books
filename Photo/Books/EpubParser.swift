@@ -16,12 +16,14 @@ enum EpubParser {
         case missingContainer
         case missingOPF
         case emptySpine
+        case invalidDocument(String)
 
         var errorDescription: String? {
             switch self {
             case .missingContainer: return "EPUB 缺少 META-INF/container.xml"
             case .missingOPF:       return "EPUB 找不到内容清单（OPF）"
             case .emptySpine:       return "EPUB 里没有可阅读的正文"
+            case .invalidDocument(let path): return "EPUB 章节或清单损坏：\(path)"
             }
         }
     }
@@ -32,13 +34,13 @@ enum EpubParser {
         // 1. container.xml 指向 OPF
         guard let container = entries["META-INF/container.xml"] else { throw EpubError.missingContainer }
         let containerXML = try MiniZip.extract(container, from: data)
-        guard let opfPath = XMLScanner.attribute(in: containerXML, element: "rootfile", name: "full-path") else {
+        guard let opfPath = try XMLScanner.attribute(in: containerXML, element: "rootfile", name: "full-path") else {
             throw EpubError.missingOPF
         }
 
         guard let opfEntry = entries[MiniZip.normalize(opfPath)] else { throw EpubError.missingOPF }
         let opfData = try MiniZip.extract(opfEntry, from: data)
-        let opf = OPF.parse(opfData)
+        let opf = try OPF.parse(opfData)
 
         // OPF 里的 href 是相对它自己所在目录的
         let baseDirectory = (MiniZip.normalize(opfPath) as NSString).deletingLastPathComponent
@@ -46,15 +48,15 @@ enum EpubParser {
         // 2. 按 spine 顺序取正文
         var chapters: [ParsedChapter] = []
         for idref in opf.spine {
-            guard let href = opf.manifest[idref] else { continue }
+            guard let href = opf.manifest[idref] else { throw EpubError.invalidDocument(idref) }
             let full = resolve(href, relativeTo: baseDirectory)
-            guard let entry = entries[full] else { continue }
-            guard let html = try? MiniZip.extract(entry, from: data) else { continue }
+            guard let entry = entries[full] else { throw EpubError.invalidDocument(full) }
+            let html = try MiniZip.extract(entry, from: data)
 
-            let text = HTMLText.plainText(from: html)
-            guard text.count > 20 else { continue }   // 跳过封面页、版权页这类几乎没内容的
+            let text = try HTMLText.plainText(from: html)
+            guard !text.isEmpty else { continue }
 
-            let title = HTMLText.firstHeading(from: html)
+            let title = try HTMLText.firstHeading(from: html)
                 ?? firstLineAsTitle(text)
                 ?? "第 \(chapters.count + 1) 章"
             // text 是整页 HTML 抽出来的纯文本，标题那个 <h1> 也在里面，
@@ -88,12 +90,12 @@ enum EpubParser {
 
 /// 从一小段 XML 里取出某个元素的某个属性（用来读 container.xml 的 full-path）
 enum XMLScanner {
-    static func attribute(in data: Data, element: String, name: String) -> String? {
+    static func attribute(in data: Data, element: String, name: String) throws -> String? {
         let delegate = AttributeDelegate(element: element.lowercased(), attribute: name.lowercased())
         let parser = XMLParser(data: data)
         parser.delegate = delegate
         parser.shouldProcessNamespaces = false
-        parser.parse()
+        guard parser.parse() else { throw EpubParser.EpubError.invalidDocument("container.xml") }
         return delegate.value
     }
 }
@@ -116,7 +118,6 @@ private final class AttributeDelegate: NSObject, XMLParserDelegate {
         guard name == element else { return }
         for (key, v) in attributes where key.lowercased() == attribute {
             value = v
-            parser.abortParsing()
             return
         }
     }
@@ -132,12 +133,12 @@ private struct OPF {
     /// spine 里的 idref 顺序
     var spine: [String] = []
 
-    static func parse(_ data: Data) -> OPF {
+    static func parse(_ data: Data) throws -> OPF {
         let delegate = OPFDelegate()
         let parser = XMLParser(data: data)
         parser.delegate = delegate
         parser.shouldProcessNamespaces = false
-        parser.parse()
+        guard parser.parse() else { throw EpubParser.EpubError.invalidDocument("OPF") }
         return delegate.result
     }
 }
@@ -190,8 +191,8 @@ private final class OPFDelegate: NSObject, XMLParserDelegate {
 
 enum HTMLText {
 
-    static func plainText(from data: Data) -> String {
-        let html = TextDecoding.decode(data) ?? ""
+    static func plainText(from data: Data) throws -> String {
+        guard let html = TextDecoding.decode(data) else { throw EpubParser.EpubError.invalidDocument("XHTML 编码") }
         return plainText(from: html)
     }
 
@@ -228,8 +229,8 @@ enum HTMLText {
     }
 
     /// 用 h1~h3 作为章节标题
-    static func firstHeading(from data: Data) -> String? {
-        let html = TextDecoding.decode(data) ?? ""
+    static func firstHeading(from data: Data) throws -> String? {
+        guard let html = TextDecoding.decode(data) else { throw EpubParser.EpubError.invalidDocument("XHTML 编码") }
         guard let range = html.range(of: "<h[1-3]\\b[^>]*>[\\s\\S]*?</h[1-3]>",
                                      options: [.regularExpression, .caseInsensitive]) else { return nil }
         let heading = plainText(from: String(html[range]))

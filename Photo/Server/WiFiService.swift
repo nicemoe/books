@@ -23,6 +23,7 @@ final class WiFiService {
     /// 上一次有人来访的时间。空闲自动停服要用。
     private var lastActivity = Date()
     private var idleWatch: Task<Void, Never>?
+    private var startRevision = 0
     /// 没人来这么久就自己关掉。见 watchIdle。
     private static let idleLimit: TimeInterval = 20 * 60
 
@@ -43,7 +44,9 @@ final class WiFiService {
     // MARK: 开关
 
     func start() async {
-        guard !isRunning else { return }
+        guard !isRunning, status != .starting else { return }
+        startRevision += 1
+        let revision = startRevision
         status = .starting
         receivedCount = 0
         lastEvent = nil
@@ -58,6 +61,7 @@ final class WiFiService {
                 guard let self else { return .notFound }
                 return await self.handle(request)
             }
+            guard revision == startRevision else { return }
             status = .running(url: "http://\(ip):\(port)")
             // 服务只能在前台活着——App 一被挂起 NWListener 就没了，所以传输
             // 期间必须拦着屏幕自动锁。代价是这段时间屏幕一直亮着，很费电，
@@ -66,11 +70,13 @@ final class WiFiService {
             lastActivity = Date()
             watchIdle()
         } catch {
+            guard revision == startRevision else { return }
             status = .failed(error.localizedDescription)
         }
     }
 
     func stop() {
+        startRevision += 1
         idleWatch?.cancel()
         idleWatch = nil
         server.stop()
@@ -137,7 +143,8 @@ final class WiFiService {
 
         case ("POST", "/api/book/delete"):
             guard let id = request.uuid("id") else { return .error("参数不完整") }
-            books.delete(bookID: id)
+            do { try books.delete(bookID: id) }
+            catch { return .error(error.localizedDescription, status: 409) }
             note("网页删除了一本书")
             return .ok()
 

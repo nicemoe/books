@@ -30,8 +30,7 @@ enum Paginator {
 
     /// 返回每一页在字符串里的范围
     static func pageRanges(for attributed: NSAttributedString, size: CGSize) -> [NSRange] {
-        let ranges = pageRanges(for: attributed, size: size, from: 0, upTo: attributed.length)
-        return ranges.isEmpty ? [NSRange(location: 0, length: attributed.length)] : ranges
+        pageRanges(for: attributed, size: size, from: 0, upTo: attributed.length)
     }
 
     /// 从 start 开始往后切页，切到 limit（不含）为止。

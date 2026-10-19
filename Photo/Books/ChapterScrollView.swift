@@ -230,7 +230,7 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
 
     private func makeItems(chapter: Int) -> [PageItem] {
         guard let source, chapter >= 0, chapter < chapterTitles.count else { return [] }
-        let full = source.attributed(chapter)
+        guard let full = source.attributed(chapter) else { return [] }
         let ranges = source.pages(chapter)
         let width = textWidth
 
@@ -367,18 +367,26 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
         report()
     }
 
-    private func report() {
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { report(force: true) }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        report(force: true)
+    }
+
+    private func report(force: Bool = false) {
         guard !items.isEmpty else { return }
         let pos = currentPosition()
         guard pos.chapter != lastReported.chapter || pos.offset != lastReported.offset else { return }
-        lastReported = pos
         desired = pos          // 用户滚到哪，重排时就回哪
 
         // 往外报会让 SwiftUI 重算一次 body。自动滚动时每帧都报的话
         // 一秒六十次，明显掉帧。换章要立刻报，其余的限到每秒四次。
         let now = CACurrentMediaTime()
         let changedChapter = pos.chapter != reportedChapter
-        guard changedChapter || now - lastReportTime > 0.25 else { return }
+        guard force || changedChapter || now - lastReportTime > 0.25 else { return }
+        lastReported = pos
         lastReportTime = now
         reportedChapter = pos.chapter
         onPositionChange?(pos.chapter, pos.offset)
@@ -457,6 +465,7 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
     private func stopAutoScroll() {
         displayLink?.invalidate()
         displayLink = nil
+        report(force: true)
     }
 
     @objc private func step(_ link: CADisplayLink) {

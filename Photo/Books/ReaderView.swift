@@ -6,6 +6,7 @@ struct ReaderView: View {
 
     @Environment(BookLibrary.self) private var library
     @Environment(WiFiService.self) private var wifi
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
     /// 翻页模式的当前位置。分页交给 PageSource，这里只记「第几章第几页」。
@@ -45,6 +46,8 @@ struct ReaderView: View {
     /// 一千本书的章节表加起来几百 MB，没道理为了画书架就全装进内存。
     /// 取到之前正文没法排版，先摆一个「正在整理章节」。
     @State private var chapters: [ChapterMeta] = []
+    @State private var readingReady = false
+    @State private var loadingError: String?
 
     private var book: Book? { library.book(bookID) }
     private var settings: ReaderSettings { library.settings }
@@ -61,6 +64,11 @@ struct ReaderView: View {
                 // 不要 ignoresSafeArea：机身是圆角的，正文铺到物理边缘的话
                 // 最后一行和页码会被圆角切掉。只让背景色铺满，文字待在安全区内。
                 content(book)
+            } else if let loadingError {
+                VStack(spacing: 16) {
+                    Text(loadingError).multilineTextAlignment(.center)
+                    Button("返回书架") { dismiss() }
+                }.padding()
             } else if book != nil {
                 // 章节表还在路上。通常是读一个几十 KB 的文件，一闪而过；
                 // 只有第一次打开一本还没拆过的书（从旧版本升上来、或者内部
@@ -75,23 +83,39 @@ struct ReaderView: View {
         }
         .statusBarHidden(!showChrome)
         .navigationBarHidden(true)
-        .task(id: bookID) {
-            chapters = await library.chapters(of: bookID)
-            restoreProgress()
+        .task(id: library.contentRevision) {
+            readingReady = false
+            chapters = []
+            pageSource = nil
+            loadingError = nil
+            do {
+                let loaded = try await library.chapters(of: bookID)
+                try Task.checkCancellation()
+                pageSource = nil
+                chapters = loaded
+                restoreProgress()
+                readingReady = true
+            } catch is CancellationError { }
+            catch { loadingError = error.localizedDescription }
+        }
+        .alert("阅读失败", isPresented: Binding(get: { library.operationError != nil },
+            set: { if !$0 { library.operationError = nil } })) {
+            Button("返回书架") { library.operationError = nil; dismiss() }
+        } message: { Text(library.operationError ?? "") }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { applyBrightness() }
+            else {
+                saveProgress()
+                library.saveNow()
+                isAutoFlipping = false
+                restoreBrightness()
+            }
         }
         // 正读着的这本被抽走了就退出去。网页那边删书、或者在访达里删了 txt
         // 之后对账清掉，都会走到这儿。不退的话屏幕上只剩一片背景色——
         // 工具栏也要 book 才画得出来，连返回键都没有。
         .onChange(of: book == nil) { _, gone in
             if gone { dismiss() }
-        }
-        // 正文在电脑上被改过、书重拆了，手里这份章节表就作废了。
-        //
-        // 章节表是打开书那一刻取的一份拷贝，之后不会自己更新。而对账是
-        // 在书架上跑的，切回前台时即使人正在阅读页里也照跑不误——不重新取
-        // 的话，偏移全指着旧的排布，翻页读出来是上一章的半句话。
-        .onChange(of: book?.textBytes) { _, _ in
-            Task { chapters = await library.chapters(of: bookID) }
         }
         .onChange(of: locator) { _, _ in saveProgress() }
         .onChange(of: settings.mode) { _, mode in
@@ -107,7 +131,7 @@ struct ReaderView: View {
         }
         // 自动翻页：isAutoFlipping 变 false 时 task 自动取消
         .task(id: isAutoFlipping) {
-            guard isAutoFlipping else { return }
+            guard isAutoFlipping, scenePhase == .active else { return }
             UIApplication.shared.isIdleTimerDisabled = true
             defer { UIApplication.shared.isIdleTimerDisabled = wifi.isRunning }
 
@@ -115,10 +139,10 @@ struct ReaderView: View {
                 // 滚动模式是匀速推进，由容器的 CADisplayLink 驱动，
                 // 这里只剩「别让屏幕自己锁掉」这一件事
                 guard settings.mode == .paged else {
-                    try? await Task.sleep(for: .seconds(1))
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
                     continue
                 }
-                try? await Task.sleep(for: .seconds(settings.autoFlipInterval))
+                do { try await Task.sleep(for: .seconds(settings.autoFlipInterval)) } catch { return }
                 guard !Task.isCancelled, isAutoFlipping else { return }
                 guard let source = pageSource, source.next(locator) != nil else {
                     isAutoFlipping = false   // 到全书末尾了
@@ -131,6 +155,7 @@ struct ReaderView: View {
         .onChange(of: settings.brightness) { _, _ in applyBrightness() }
         .onDisappear {
             saveProgress()
+            library.saveNow()
             isAutoFlipping = false
             restoreBrightness()
         }
@@ -202,8 +227,9 @@ struct ReaderView: View {
                 }
             }
             .onAppear { rebuildSource(book: book, contentSize: contentSize) }
+            .onChange(of: chapters) { _, _ in rebuildSource(book: book, contentSize: contentSize) }
             .onChange(of: contentSize) { _, size in rebuildSource(book: book, contentSize: size) }
-            .onChange(of: settings) { _, _ in rebuildSource(book: book, contentSize: contentSize) }
+            .onChange(of: settings.layout) { _, _ in rebuildSource(book: book, contentSize: contentSize) }
         }
     }
 
@@ -243,6 +269,7 @@ struct ReaderView: View {
                         autoScrollInterval: settings.autoFlipInterval,
                         onPositionChange: { chapter, offset in
                             scrollCharacterOffset = offset
+                            library.updateProgress(bookID: bookID, chapterIndex: chapter, characterOffset: offset)
                             // 滚过章界了，把当前章同步过来，信息条和目录才跟得上
                             if locator.chapter != chapter {
                                 locator = PageLocator(chapter: chapter, page: 0)
@@ -255,10 +282,13 @@ struct ReaderView: View {
                 }
             }
             .onAppear { if let book { rebuildSource(book: book, contentSize: contentSize) } }
+            .onChange(of: chapters) { _, _ in
+                if let book { rebuildSource(book: book, contentSize: contentSize) }
+            }
             .onChange(of: contentSize) { _, size in
                 if let book { rebuildSource(book: book, contentSize: size) }
             }
-            .onChange(of: settings) { _, _ in
+            .onChange(of: settings.layout) { _, _ in
                 if let book { rebuildSource(book: book, contentSize: contentSize) }
             }
         }
@@ -433,12 +463,9 @@ struct ReaderView: View {
             return
         }
         let offset = currentOffset
-        let text = library.chapterText(bookID: bookID, index: locator.chapter)
-        let start = text.index(text.startIndex, offsetBy: min(offset, text.count))
-        let end = text.index(start, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
-        let snippet = String(text[start..<end])
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        let snippet: String
+        do { snippet = BookText.snippet(try library.chapterText(bookID: bookID, index: locator.chapter), at: offset) }
+        catch { library.operationError = error.localizedDescription; return }
 
         library.addBookmark(bookID: bookID,
                             chapter: locator.chapter,
@@ -493,8 +520,12 @@ struct ReaderView: View {
 
     private func restoreProgress() {
         guard let book else { return }
-        locator = PageLocator(chapter: book.progress.chapterIndex, page: 0)
-        requestScroll(chapter: book.progress.chapterIndex, offset: book.progress.characterOffset)
+        guard !chapters.isEmpty else { return }
+        let chapter = min(max(0, book.progress.chapterIndex), chapters.count - 1)
+        let offset = min(max(0, book.progress.characterOffset), chapters[chapter].characterCount)
+        pendingAnchor = offset
+        locator = PageLocator(chapter: chapter, page: 0)
+        requestScroll(chapter: chapter, offset: offset)
     }
 
     /// 让滚动容器跳到指定位置
@@ -524,6 +555,8 @@ struct ReaderView: View {
     }
 
     private func saveProgress() {
+        guard readingReady, pageSource?.failure == nil,
+              settings.mode == .scroll || pageSource != nil else { return }
         let offset = currentOffset
         library.updateProgress(bookID: bookID, chapterIndex: locator.chapter, characterOffset: offset)
     }

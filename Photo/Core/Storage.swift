@@ -23,7 +23,6 @@ enum AppStore {
     static let root: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask)[0]
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }()
 
@@ -33,13 +32,13 @@ enum AppStore {
     ///
     /// 目标已经在了就不动——搬过一次之后 Documents 那份如果又冒出来
     /// （从备份恢复、别的设备同步过来），也是旧的，不该盖掉现在这份。
-    static func migrateFromDocuments(_ name: String, to target: URL) {
+    static func migrateFromDocuments(_ name: String, to target: URL) throws {
         let fm = FileManager.default
         let old = Paths.documents.appendingPathComponent(name)
         guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: target.path) else { return }
         // 旧版本给索引上过 immutable 锁，锁着的文件搬不动，先摘掉
-        try? fm.setAttributes([.immutable: false], ofItemAtPath: old.path)
-        try? fm.moveItem(at: old, to: target)
+        try fm.setAttributes([.immutable: false], ofItemAtPath: old.path)
+        try fm.moveItem(at: old, to: target)
     }
 
     /// 从 iCloud/iTunes 备份里排除。
@@ -47,11 +46,11 @@ enum AppStore {
     /// 给能重算的东西用——章节表丢了照着正文重拆就有，没必要让它把
     /// 用户的备份撑大。索引不用排除：阅读进度和书签只此一份，
     /// 换手机的时候恰恰是最该跟过去的。
-    static func excludeFromBackup(_ url: URL) {
+    static func excludeFromBackup(_ url: URL) throws {
         var url = url
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? url.setResourceValues(values)
+        try url.setResourceValues(values)
     }
 }
 

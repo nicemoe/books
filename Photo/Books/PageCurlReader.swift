@@ -23,6 +23,9 @@ final class PageSource {
     /// 正文可用区域（已扣掉页边距）
     var pageSize: CGSize
 
+    private var recentChapters: [Int] = []
+    private(set) var failure: Error?
+
     private var textCache: [Int: String] = [:]
     private var attributedCache: [Int: NSAttributedString] = [:]
     private var pagesCache: [Int: [NSRange]] = [:]
@@ -46,27 +49,46 @@ final class PageSource {
         pagesCache.removeAll()
     }
 
-    func text(_ chapter: Int) -> String {
-        if let hit = textCache[chapter] { return hit }
-        let value = library.chapterText(bookID: bookID, index: chapter)
-        // 只留最近几章，长篇翻久了别把全书堆在内存里
-        if textCache.count > 6 { textCache.removeAll() }
-        textCache[chapter] = value
-        return value
+    private func touch(_ chapter: Int) {
+        recentChapters.removeAll { $0 == chapter }
+        recentChapters.append(chapter)
+        if recentChapters.count > 6 {
+            let oldest = recentChapters.removeFirst()
+            textCache.removeValue(forKey: oldest)
+            attributedCache.removeValue(forKey: oldest)
+            pagesCache.removeValue(forKey: oldest)
+        }
     }
 
-    func attributed(_ chapter: Int) -> NSAttributedString {
+    func text(_ chapter: Int) -> String? {
+        guard failure == nil else { return nil }
+        touch(chapter)
+        if let hit = textCache[chapter] { return hit }
+        do {
+            let value = try library.chapterText(bookID: bookID, index: chapter)
+            textCache[chapter] = value
+            return value
+        } catch {
+            failure = error
+            Task { @MainActor [library] in library.operationError = "无法读取正文：\(error.localizedDescription)" }
+            return nil
+        }
+    }
+
+    func attributed(_ chapter: Int) -> NSAttributedString? {
+        touch(chapter)
         if let hit = attributedCache[chapter] { return hit }
-        let value = ReaderTypesetter.attributedText(text(chapter), settings: settings, color: textColor)
-        if attributedCache.count > 6 { attributedCache.removeAll() }
+        guard let text = text(chapter) else { return nil }
+        let value = ReaderTypesetter.attributedText(text, settings: settings, color: textColor)
         attributedCache[chapter] = value
         return value
     }
 
     func pages(_ chapter: Int) -> [NSRange] {
+        touch(chapter)
         if let hit = pagesCache[chapter] { return hit }
-        let value = Paginator.pageRanges(for: attributed(chapter), size: pageSize)
-        if pagesCache.count > 6 { pagesCache.removeAll() }
+        guard let attributed = attributed(chapter) else { return [] }
+        let value = Paginator.pageRanges(for: attributed, size: pageSize)
         pagesCache[chapter] = value
         return value
     }
@@ -79,7 +101,7 @@ final class PageSource {
     /// 你正看的那一行多半在某页中部，直接落过去等于往回跳了半页。
     /// 把它顶成新的一页第一行，切换才是无损的。
     func anchor(chapter: Int, at offset: Int) {
-        let full = attributed(chapter)
+        guard let full = attributed(chapter) else { return }
         guard offset > 0, offset < full.length else { return }
         let head = Paginator.pageRanges(for: full, size: pageSize, from: 0, upTo: offset)
         let tail = Paginator.pageRanges(for: full, size: pageSize, from: offset, upTo: full.length)
@@ -90,9 +112,9 @@ final class PageSource {
     func attributed(at locator: PageLocator) -> NSAttributedString? {
         let ranges = pages(locator.chapter)
         guard ranges.indices.contains(locator.page) else { return nil }
-        let full = attributed(locator.chapter)
+        guard let full = attributed(locator.chapter) else { return nil }
         let range = ranges[locator.page]
-        guard range.location + range.length <= full.length else { return full }
+        guard range.location + range.length <= full.length else { return nil }
         return full.attributedSubstring(from: range)
     }
 

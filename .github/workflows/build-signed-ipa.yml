@@ -48,6 +48,9 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
+      - name: 阅读核心回归测试
+        run: python3 Tools/Checks/run_reader_tests.py
+
       - name: 检查 secret 是否齐全
         env:
           CERT: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}

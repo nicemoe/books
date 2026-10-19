@@ -9,6 +9,12 @@ enum TextDecoding {
     static func decode(_ data: Data) -> String? {
         guard !data.isEmpty else { return "" }
 
+        if data.starts(with: [0xFF, 0xFE, 0x00, 0x00]) {
+            return String(data: data.dropFirst(4), encoding: .utf32LittleEndian)
+        }
+        if data.starts(with: [0x00, 0x00, 0xFE, 0xFF]) {
+            return String(data: data.dropFirst(4), encoding: .utf32BigEndian)
+        }
         // 1. BOM 最可靠，优先看
         if data.starts(with: [0xEF, 0xBB, 0xBF]) {
             return String(data: data.dropFirst(3), encoding: .utf8)
@@ -21,7 +27,7 @@ enum TextDecoding {
         }
 
         // 2. 严格 UTF-8：非法字节序列会返回 nil，所以能解出来基本就是 UTF-8
-        if let utf8 = String(data: data, encoding: .utf8) {
+        if let utf8 = String(data: data, encoding: .utf8), !utf8.contains("\0") {
             return utf8
         }
 
@@ -37,20 +43,8 @@ enum TextDecoding {
             return big5
         }
 
-        // 5. GB18030 即使中文占比不高也先用着，总比乱码强
-        if let gb = string(from: data, cfEncoding: CFStringEncodings.GB_18030_2000) {
-            return gb
-        }
+        return nil
 
-        // 6. 交给系统统计猜测
-        var converted: NSString?
-        NSString.stringEncoding(for: data,
-                                encodingOptions: nil,
-                                convertedString: &converted,
-                                usedLossyConversion: nil)
-        if let converted { return converted as String }
-
-        return String(data: data, encoding: .isoLatin1)
     }
 
     private static func string(from data: Data, cfEncoding: CFStringEncodings) -> String? {

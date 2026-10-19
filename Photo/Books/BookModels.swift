@@ -123,6 +123,8 @@ struct Book: Identifiable, Codable, Hashable {
     /// 正文文件的字节数。用来发现文件在访达里被改过——
     /// 大小对不上就说明索引里那套偏移已经不作数了，得重新拆一遍。
     var textBytes: Int = 0
+    var sourceModifiedAt: Double?
+    var positionVersion: Int = 0
     var author: String = ""
     var format: BookFormat
     var addedAt: Date = Date()
@@ -147,6 +149,7 @@ struct Book: Identifiable, Codable, Hashable {
 
     init(id: UUID = UUID(), title: String,
          sourceName: String = "", textBytes: Int = 0,
+         sourceModifiedAt: Double? = nil, positionVersion: Int = 0,
          author: String = "", format: BookFormat,
          addedAt: Date = Date(), chapterCount: Int = 0,
          hasRealChapters: Bool = true, splitVersion: Int = 0,
@@ -157,6 +160,8 @@ struct Book: Identifiable, Codable, Hashable {
         self.title = title
         self.sourceName = sourceName
         self.textBytes = textBytes
+        self.sourceModifiedAt = sourceModifiedAt
+        self.positionVersion = positionVersion
         self.author = author
         self.format = format
         self.addedAt = addedAt
@@ -174,10 +179,12 @@ struct Book: Identifiable, Codable, Hashable {
     /// 那样每加一个字段，旧的 books.json 就解不出来，整个书架会被清空。
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
         sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName) ?? ""
         textBytes = try c.decodeIfPresent(Int.self, forKey: .textBytes) ?? 0
+        sourceModifiedAt = try c.decodeIfPresent(Double.self, forKey: .sourceModifiedAt)
+        positionVersion = try c.decodeIfPresent(Int.self, forKey: .positionVersion) ?? 0
         author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
@@ -206,14 +213,8 @@ struct Book: Identifiable, Codable, Hashable {
     /// 0...1
     var progressRatio: Double {
         guard totalCharacters > 0 else { return 0 }
-        // charactersBefore 是翻章时顺手记下的。老数据里没有，退回按章序估——
-        // 章长不均，估得糙一点，但书架上那根进度条不至于一直停在 0
-        if progress.charactersBefore > 0 || progress.chapterIndex == 0 {
-            return min(1, Double(progress.charactersBefore + progress.characterOffset)
-                       / Double(totalCharacters))
-        }
-        guard chapterCount > 0 else { return 0 }
-        return min(1, Double(progress.chapterIndex) / Double(chapterCount))
+        return min(1, max(0, (Double(progress.charactersBefore) + Double(progress.characterOffset))
+                           / Double(totalCharacters)))
     }
 
     var progressText: String {
@@ -407,5 +408,24 @@ struct ReaderSettings: Codable, Hashable {
         pageAnimation = try c.decodeIfPresent(PageAnimation.self, forKey: .pageAnimation) ?? .curl
         autoFlipInterval = try c.decodeIfPresent(Double.self, forKey: .autoFlipInterval) ?? 8
         brightness = try c.decodeIfPresent(Double.self, forKey: .brightness)
+        guard Self.fontSizeRange.contains(fontSize), Self.lineSpacingRange.contains(lineSpacing),
+              Self.autoFlipRange.contains(autoFlipInterval), (0...80).contains(margin),
+              brightness.map({ (0...1).contains($0) }) ?? true else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                debugDescription: "阅读设置超出有效范围"))
+        }
+    }
+}
+
+extension ReaderSettings {
+    struct Layout: Hashable {
+        let fontSize: Double
+        let lineSpacing: Double
+        let margin: Double
+        let font: ReaderFont
+        let theme: ReaderTheme
+    }
+    var layout: Layout {
+        Layout(fontSize: fontSize, lineSpacing: lineSpacing, margin: margin, font: font, theme: theme)
     }
 }

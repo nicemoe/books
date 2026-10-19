@@ -34,6 +34,9 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
+      - name: 阅读核心回归测试
+        run: python3 Tools/Checks/run_reader_tests.py
+
       - name: 选择 Xcode
         run: |
           set -euo pipefail

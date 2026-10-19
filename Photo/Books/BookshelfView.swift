@@ -181,7 +181,8 @@ struct BookshelfView: View {
             TextField("书名", text: $renameText)
             Button("取消", role: .cancel) { renaming = nil }
             Button("保存") {
-                if let book = renaming { library.rename(bookID: book.id, to: renameText) }
+                do { if let book = renaming { try library.rename(bookID: book.id, to: renameText) } }
+                catch { errorMessage = error.localizedDescription }
                 renaming = nil
             }
         }
@@ -189,14 +190,15 @@ struct BookshelfView: View {
                             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible) {
             Button("删除", role: .destructive) {
-                if let book = deleting { library.delete(bookID: book.id) }
+                do { if let book = deleting { try library.delete(bookID: book.id) } }
+                catch { errorMessage = error.localizedDescription }
                 deleting = nil
             }
             Button("取消", role: .cancel) { deleting = nil }
         } message: {
             Text("书和阅读进度都会被移除。")
         }
-        .alert("导入失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+        .alert("操作失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("知道了", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
@@ -210,7 +212,13 @@ struct BookshelfView: View {
         // 电脑上把书丢进 Books 文件夹后，回到 App 就收走。
         // 只在切回前台时扫一次——文件是在 App 不活跃的时候放进来的，
         // 常驻监听目录只会白耗电。
-        .task { await collectLooseFiles() }
+        .task {
+            if let error = library.operationError { errorMessage = error; library.operationError = nil }
+            await collectLooseFiles()
+        }
+        .onChange(of: library.operationError) { _, error in
+            if openedBook == nil, let error { errorMessage = error; library.operationError = nil }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await collectLooseFiles() }
@@ -228,9 +236,6 @@ struct BookshelfView: View {
         let saved = await library.importLooseFiles()
         let gone = await library.pruneMissingSources()
         let redone = await library.refreshEdited()
-        // 兜底：清掉认不出主人的章节表。删书时本来就会一并删，这里管的是
-        // 漏网的那些——索引被删过之后重收，旧 id 那批就没人认领了。
-        await library.sweepOrphanChapters()
         guard saved > 0 || gone > 0 || redone > 0 else { return }
 
         let parts = [saved > 0 ? "收进 \(saved) 本" : nil,

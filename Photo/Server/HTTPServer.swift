@@ -20,142 +20,95 @@ final class HTTPServer: @unchecked Sendable {
         }
     }
 
-    private let queue = DispatchQueue(label: "photovault.http.server")
+    // 监听器、连接和启动过程统一由同一串行队列管理。
+    private let queue = DispatchQueue(label: "reader.http.server")
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: HTTPConnection] = [:]
-    private let lock = NSLock()
 
-    private(set) var port: UInt16 = 0
-    var onStateChange: (@Sendable (Bool) -> Void)?
-
-    /// 依次尝试若干端口，返回实际监听端口
     @discardableResult
-    func start(preferredPorts: [UInt16] = [8080, 8081, 8088, 9000, 9090], handler: @escaping Handler) async throws -> UInt16 {
-        stop()
-
-        var lastError: Error?
-        for candidate in preferredPorts {
-            do {
-                try await startListening(on: candidate, handler: handler)
-                return candidate
-            } catch ServerError.timedOut {
-                // 超时不是端口问题（多半是本地网络权限），换端口也没用
-                throw ServerError.timedOut
-            } catch {
-                lastError = error
-                continue
-            }
-        }
-        throw lastError ?? ServerError.noAvailablePort
-    }
-
-    private func startListening(on port: UInt16, handler: @escaping Handler) async throws {
+    func start(handler: @escaping Handler) async throws -> UInt16 {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         params.includePeerToPeer = false
         if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
             tcp.noDelay = true
         }
-
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            throw ServerError.noAvailablePort
+        // 由系统分配空闲端口，不在失败后轮流重试不同端口。
+        let candidate = try NWListener(using: params, on: .any)
+        candidate.service = NWListener.Service(name: UIDeviceName.current, type: "_http._tcp")
+        queue.sync {
+            stopOnQueue()
+            listener = candidate
         }
-
-        let listener = try NWListener(using: params, on: nwPort)
-        // 广播 Bonjour，既方便发现，也能正确触发「本地网络」权限弹窗
-        listener.service = NWListener.Service(name: UIDeviceName.current, type: "_http._tcp")
-
-        listener.newConnectionHandler = { [weak self] connection in
-            guard let self else { return }
-            let wrapper = HTTPConnection(connection: connection, queue: self.queue, handler: handler) { [weak self] id in
-                self?.remove(id)
-            }
-            self.add(wrapper)
-            wrapper.start()
-        }
-
-        let resumed = ResumeGuard()
-
-        do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                // .waiting 不当作失败：首次开启时系统可能正在等用户回应「本地网络」授权，
-                // 用超时兜底，避免卡死。
-                let timeout = DispatchWorkItem {
-                    if resumed.claim() { continuation.resume(throwing: ServerError.timedOut) }
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                guard listener === candidate else {
+                    continuation.resume(throwing: CancellationError())
+                    return
                 }
-                queue.asyncAfter(deadline: .now() + 4, execute: timeout)
-
-                listener.stateUpdateHandler = { [weak self] state in
+                let resumed = ResumeGuard()
+                let timeout = DispatchWorkItem { [weak self, weak candidate] in
+                    guard resumed.claim() else { return }
+                    guard let candidate else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    if self?.listener === candidate { self?.stopOnQueue() }
+                    continuation.resume(throwing: ServerError.timedOut)
+                }
+                candidate.newConnectionHandler = { [weak self, weak candidate] connection in
+                    guard let self, let candidate, self.listener === candidate else {
+                        connection.cancel()
+                        return
+                    }
+                    let wrapper = HTTPConnection(connection: connection, queue: self.queue, handler: handler) { [weak self] id in
+                        self?.connections.removeValue(forKey: id)
+                    }
+                    self.connections[ObjectIdentifier(wrapper)] = wrapper
+                    wrapper.start()
+                }
+                candidate.stateUpdateHandler = { [weak self, weak candidate] state in
+                    guard let candidate else { return }
                     switch state {
                     case .ready:
-                        self?.onStateChange?(true)
-                        if resumed.claim() { timeout.cancel(); continuation.resume() }
+                        guard resumed.claim() else { return }
+                        timeout.cancel()
+                        guard self?.listener === candidate, let port = candidate.port else {
+                            continuation.resume(throwing: CancellationError())
+                            return
+                        }
+                        continuation.resume(returning: port.rawValue)
                     case .failed(let error):
+                        if self?.listener === candidate { self?.stopOnQueue() }
                         if resumed.claim() {
                             timeout.cancel()
                             continuation.resume(throwing: ServerError.failed(error.localizedDescription))
                         }
-                    case .waiting(let error):
-                        // 端口被占用时 NWListener 是停在 .waiting 而不是 .failed，
-                        // 必须在这里立刻失败，否则换端口重试的逻辑永远走不到。
-                        // 其他 waiting（比如在等「本地网络」授权）交给超时兜底。
-                        if case .posix(let code) = error, code == .EADDRINUSE || code == .EADDRNOTAVAIL {
-                            if resumed.claim() {
-                                timeout.cancel()
-                                continuation.resume(throwing: ServerError.failed(error.localizedDescription))
-                            }
-                        }
                     case .cancelled:
-                        self?.onStateChange?(false)
-                        if resumed.claim() { timeout.cancel(); continuation.resume(throwing: ServerError.noAvailablePort) }
-                    default:
-                        break
+                        if resumed.claim() {
+                            timeout.cancel()
+                            continuation.resume(throwing: CancellationError())
+                        }
+                    default: break
                     }
                 }
-                listener.start(queue: queue)
+                queue.asyncAfter(deadline: .now() + 10, execute: timeout)
+                candidate.start(queue: queue)
             }
-        } catch {
-            listener.stateUpdateHandler = nil
-            listener.cancel()
-            throw error
         }
-
-        lock.lock()
-        self.listener = listener
-        self.port = port
-        lock.unlock()
     }
 
-    func stop() {
-        // listener/port 也要纳入锁：start() 跑在并发执行器上，stop() 来自主线程，
-        // 快速反复开关时两边会同时写这两个字段。
-        lock.lock()
-        let old = listener
+    func stop() { queue.sync { stopOnQueue() } }
+
+    private func stopOnQueue() {
+        listener?.cancel()
         listener = nil
-        port = 0
         let all = Array(connections.values)
         connections.removeAll()
-        lock.unlock()
-
-        old?.cancel()
         all.forEach { $0.close() }
-        onStateChange?(false)
     }
 
-    /// 手上还有没有连着的客户端。
-    /// 空闲自动停服要用：正在传一个大文件的时候，连接是在的但请求还没完成。
-    var hasActiveConnections: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return !connections.isEmpty
-    }
-
-    private func add(_ c: HTTPConnection) {
-        lock.lock(); connections[ObjectIdentifier(c)] = c; lock.unlock()
-    }
-
-    private func remove(_ id: ObjectIdentifier) {
-        lock.lock(); connections.removeValue(forKey: id); lock.unlock()
-    }
+    var hasActiveConnections: Bool { queue.sync { !connections.isEmpty } }
 }
 
 /// 保证 continuation 只被 resume 一次
@@ -276,10 +229,18 @@ private final class HTTPConnection {
         let searchStart = buffer.index(buffer.startIndex, offsetBy: skip)
 
         guard let range = buffer.range(of: terminator, in: searchStart..<buffer.endIndex) else {
+            if buffer.count > 16 * 1024 {
+                send(.text("Request headers too large", status: 400), keepAlive: false)
+                return false
+            }
             headerScanOffset = buffer.count
             return false
         }
 
+        guard buffer.distance(from: buffer.startIndex, to: range.upperBound) <= 16 * 1024 else {
+            send(.text("Request headers too large", status: 400), keepAlive: false)
+            return false
+        }
         let headText = String(decoding: buffer[buffer.startIndex..<range.lowerBound], as: UTF8.self)
         buffer.removeSubrange(buffer.startIndex..<range.upperBound)
         headerScanOffset = 0
@@ -294,14 +255,23 @@ private final class HTTPConnection {
         for line in lines {
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = line[line.startIndex..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            guard headers[key] == nil else {
+                send(.text("Duplicate header", status: 400), keepAlive: false)
+                return false
+            }
             headers[key] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
 
-        // Content-Length 直接来自网络，负数是合法的 Int 字面量。
-        // 负数会一路带到 buffer.prefix(_:) / removeFirst(_:)，这两个对负数是
-        // _precondition，Release 构建也照样 trap，所以必须在这里夹住。
-        // （溢出的超大值 Int(_:) 会返回 nil，被 ?? 0 兜住。）
-        let length = max(0, Int(headers["content-length"] ?? "0") ?? 0)
+        guard headers["transfer-encoding"] == nil else {
+            send(.text("Unsupported Transfer-Encoding", status: 400), keepAlive: false)
+            return false
+        }
+        let rawLength = headers["content-length"] ?? "0"
+        guard !rawLength.isEmpty, rawLength.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+              let length = Int(rawLength) else {
+            send(.text("Invalid Content-Length", status: 400), keepAlive: false)
+            return false
+        }
         guard length <= Self.maxBodyBytes else {
             send(.text("413 Payload Too Large", status: 413), keepAlive: false)
             return false
@@ -354,8 +324,10 @@ private final class HTTPConnection {
     private func send(_ response: HTTPResponse, keepAlive: Bool) {
         guard !isClosed else { return }
         let data = response.serialized(keepAlive: keepAlive)
-        connection.send(content: data, completion: .contentProcessed { [weak self] _ in
+        isHandling = true
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
+            guard error == nil else { self.close(); return }
             self.isHandling = false
             if keepAlive {
                 self.drain()
