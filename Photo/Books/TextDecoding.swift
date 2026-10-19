@@ -22,19 +22,11 @@ enum TextDecoding {
         }
         if let text = String(data: data, encoding: .utf8), isText(text) { return text }
 
-        let encodings: [UInt]
         if data.contains(0) {
-            // 单字节和中文旧编码中的 NUL 不是正文；仅在 Unicode 范围内识别。
-            guard data.count.isMultiple(of: 2) else { return nil }
-            encodings = [String.Encoding.utf16.rawValue, String.Encoding.utf32.rawValue,
-                         String.Encoding.utf16LittleEndian.rawValue,
-                         String.Encoding.utf16BigEndian.rawValue,
-                         String.Encoding.utf32LittleEndian.rawValue,
-                         String.Encoding.utf32BigEndian.rawValue]
-        } else {
-            encodings = [CFStringEncodings.GB_18030_2000, .big5].map {
-                CFStringConvertEncodingToNSStringEncoding(CFStringEncoding($0.rawValue))
-            }
+            return decodeUnmarkedUnicode(data)
+        }
+        let encodings = [CFStringEncodings.GB_18030_2000, .big5].map {
+            CFStringConvertEncodingToNSStringEncoding(CFStringEncoding($0.rawValue))
         }
         var detected: NSString?
         var lossy: ObjCBool = false
@@ -46,6 +38,29 @@ enum TextDecoding {
         guard encodings.contains(encoding), !lossy.boolValue, let detected,
               isText(detected as String) else { return nil }
         return detected as String
+    }
+
+    private static func decodeUnmarkedUnicode(_ data: Data) -> String? {
+        // 无 BOM 时以完整码元、无损往返和 ASCII/换行的字节位置判断字节序。
+        // 两种字节序同样可能时明确拒绝，不任意选择会产生乱码的一种。
+        let encodings: [String.Encoding] = [.utf32LittleEndian, .utf32BigEndian,
+                                            .utf16LittleEndian, .utf16BigEndian]
+        var result: String?
+        var strongestEvidence = -1
+        for encoding in encodings {
+            guard let text = String(data: data, encoding: encoding), isText(text),
+                  text.data(using: encoding, allowLossyConversion: false) == data else { continue }
+            let evidence = text.unicodeScalars.reduce(0) { count, scalar in
+                count + (scalar.value < 0x7F ? 1 : 0)
+            }
+            if evidence > strongestEvidence {
+                strongestEvidence = evidence
+                result = text
+            } else if evidence == strongestEvidence {
+                result = nil
+            }
+        }
+        return result
     }
 
     private static func isText(_ text: String) -> Bool {
