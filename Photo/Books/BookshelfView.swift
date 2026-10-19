@@ -20,6 +20,7 @@ struct BookshelfView: View {
     @State private var renameText = ""
     @State private var deleting: Book?
     @State private var errorMessage: String?
+    @State private var isCollectingFiles = false
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
     @State private var keyword = ""
@@ -217,7 +218,10 @@ struct BookshelfView: View {
             await collectLooseFiles()
         }
         .onChange(of: library.operationError) { _, error in
-            if openedBook == nil, let error { errorMessage = error; library.operationError = nil }
+            if !isCollectingFiles, openedBook == nil, let error {
+                errorMessage = error
+                library.operationError = nil
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -233,6 +237,15 @@ struct BookshelfView: View {
     /// 和书库对一次账：新丢进来的收走，文件被删掉的那些书也跟着走，
     /// 在电脑上改过的重新拆一遍
     private func collectLooseFiles() async {
+        guard !isCollectingFiles else { return }
+        isCollectingFiles = true
+        defer {
+            isCollectingFiles = false
+            if openedBook == nil, let error = library.operationError {
+                errorMessage = [errorMessage, error].compactMap { $0 }.joined(separator: "\n\n")
+                library.operationError = nil
+            }
+        }
         let saved = await library.importLooseFiles()
         let gone = await library.pruneMissingSources()
         let redone = await library.refreshEdited()

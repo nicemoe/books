@@ -1,76 +1,56 @@
 import Foundation
+import CoreFoundation
 
-/// 中文 TXT 小说的编码嗅探。
-///
-/// 网上流传的中文 TXT 绝大多数是 GB18030（GBK/GB2312 的超集），少部分 UTF-8，
-/// 极少数 UTF-16 或 Big5。不做嗅探直接按 UTF-8 读，十本里有八本是乱码。
+/// 先按明确的 Unicode 标记解码；无标记的旧编码交给 Foundation 识别。
+/// 只允许支持的编码和无损转换，不以中文占比判定文件是否有效。
 enum TextDecoding {
-
     static func decode(_ data: Data) -> String? {
         guard !data.isEmpty else { return "" }
 
-        if data.starts(with: [0xFF, 0xFE, 0x00, 0x00]) {
-            return String(data: data.dropFirst(4), encoding: .utf32LittleEndian)
+        // UTF-32 的 BOM 包含 UTF-16 前缀，必须先检查。
+        let signatures: [([UInt8], String.Encoding)] = [
+            ([0xFF, 0xFE, 0x00, 0x00], .utf32LittleEndian),
+            ([0x00, 0x00, 0xFE, 0xFF], .utf32BigEndian),
+            ([0xEF, 0xBB, 0xBF], .utf8),
+            ([0xFF, 0xFE], .utf16LittleEndian),
+            ([0xFE, 0xFF], .utf16BigEndian)
+        ]
+        for (bom, encoding) in signatures where data.starts(with: bom) {
+            guard let text = String(data: data.dropFirst(bom.count), encoding: encoding),
+                  isText(text) else { return nil }
+            return text
         }
-        if data.starts(with: [0x00, 0x00, 0xFE, 0xFF]) {
-            return String(data: data.dropFirst(4), encoding: .utf32BigEndian)
-        }
-        // 1. BOM 最可靠，优先看
-        if data.starts(with: [0xEF, 0xBB, 0xBF]) {
-            return String(data: data.dropFirst(3), encoding: .utf8)
-        }
-        if data.starts(with: [0xFF, 0xFE]) {
-            return String(data: data.dropFirst(2), encoding: .utf16LittleEndian)
-        }
-        if data.starts(with: [0xFE, 0xFF]) {
-            return String(data: data.dropFirst(2), encoding: .utf16BigEndian)
-        }
+        if let text = String(data: data, encoding: .utf8), isText(text) { return text }
 
-        // 2. 严格 UTF-8：非法字节序列会返回 nil，所以能解出来基本就是 UTF-8
-        if let utf8 = String(data: data, encoding: .utf8), !utf8.contains("\0") {
-            return utf8
-        }
-
-        // 3. GB18030。它几乎能吞下任意字节序列，所以必须排在 UTF-8 之后
-        if let gb = string(from: data, cfEncoding: CFStringEncodings.GB_18030_2000),
-           looksLikeChinese(gb) {
-            return gb
-        }
-
-        // 4. 繁体的可能是 Big5
-        if let big5 = string(from: data, cfEncoding: CFStringEncodings.big5),
-           looksLikeChinese(big5) {
-            return big5
-        }
-
-        return nil
-
-    }
-
-    private static func string(from data: Data, cfEncoding: CFStringEncodings) -> String? {
-        let raw = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(cfEncoding.rawValue))
-        guard raw != kCFStringEncodingInvalidId else { return nil }
-        return String(data: data, encoding: String.Encoding(rawValue: raw))
-    }
-
-    /// 抽样看 CJK 字符占比，用来判断某个编码解出来的是不是「像中文」
-    private static func looksLikeChinese(_ text: String) -> Bool {
-        let sample = text.prefix(2000)
-        guard !sample.isEmpty else { return false }
-
-        var cjk = 0
-        var replacement = 0
-        for scalar in sample.unicodeScalars {
-            switch scalar.value {
-            case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0x3000...0x303F, 0xFF00...0xFFEF:
-                cjk += 1
-            case 0xFFFD:              // 替换字符，说明解码出问题了
-                replacement += 1
-            default:
-                break
+        let encodings: [UInt]
+        if data.contains(0) {
+            // 单字节和中文旧编码中的 NUL 不是正文；仅在 Unicode 范围内识别。
+            encodings = [String.Encoding.utf16LittleEndian.rawValue,
+                         String.Encoding.utf16BigEndian.rawValue,
+                         String.Encoding.utf32LittleEndian.rawValue,
+                         String.Encoding.utf32BigEndian.rawValue]
+        } else {
+            encodings = [CFStringEncodings.GB_18030_2000, .big5].map {
+                CFStringConvertEncodingToNSStringEncoding(CFStringEncoding($0.rawValue))
             }
         }
-        if replacement > sample.count / 50 { return false }
-        return Double(cjk) / Double(sample.count) > 0.2
+        var detected: NSString?
+        var lossy: ObjCBool = false
+        let encoding = NSString.stringEncoding(for: data, encodingOptions: [
+            .suggestedEncodingsKey: encodings,
+            .useOnlySuggestedEncodingsKey: true,
+            .allowLossyKey: false
+        ], convertedString: &detected, usedLossyConversion: &lossy)
+        guard encodings.contains(encoding), !lossy.boolValue, let detected,
+              isText(detected as String) else { return nil }
+        return detected as String
+    }
+
+    private static func isText(_ text: String) -> Bool {
+        // 保留制表、换行、换页和回车；拒绝二进制控制字符。
+        !text.unicodeScalars.contains {
+            ($0.value < 0x20 && ![0x09, 0x0A, 0x0C, 0x0D].contains($0.value))
+                || $0.value == 0x7F
+        }
     }
 }

@@ -12,7 +12,7 @@ xcodebuild build -project Photo.xcodeproj -scheme Photo \
   -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO
 ```
 
-回归测试使用项目中的真实解析与存储代码，检查 EPUB 短章节、相对路径、CRC、损坏的 XML/ZIP、解压限制、Unicode 定位、TXT 章节内容保留以及并发快照写入顺序。测试需要 macOS 和 Swift 编译器。
+回归测试使用项目中的真实解析与存储代码，检查 EPUB 短章节、相对路径、CRC、损坏的 XML/ZIP、解压限制、Unicode 定位、TXT 章节内容保留、GBK/GB18030/Big5 与 Unicode 编码、中英文混排、截断字节以及并发快照写入顺序。测试需要 macOS 和 Swift 编译器。
 
 推送 `main` 后 GitHub Actions 先执行回归测试，再构建未签名 IPA，可从运行页面的 Artifacts 下载。未签名 IPA 需要自行签名后安装。签名工作流支持手动触发，所需证书和描述文件 Secrets 见 `.github/workflows/build-signed-ipa.yml`。
 
@@ -21,6 +21,7 @@ xcodebuild build -project Photo.xcodeproj -scheme Photo \
 - 通过“文件”导入 TXT 或 EPUB；EPUB 提取文字，不保留图片和原版式。
 - 在同一局域网开启 WiFi 传输，浏览器访问 App 显示的地址。端口由系统分配，重启服务后以新地址为准。
 - 也可以通过系统文件共享将书放入 `Documents/Books`；回到前台时扫描新增、修改和删除的文件。
+- 扫描和重新分章按文件独立处理，失败后继续处理其他文件，完成后汇总失败文件名；编码无法识别的原文件保留，不使用丢字节或替换乱码的有损解码。
 - 支持分页、卷页、滚动、自动翻页、字体、主题、亮度和书内搜索。
 
 ## 代码结构

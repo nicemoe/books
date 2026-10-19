@@ -48,6 +48,19 @@ struct ReaderRegressionTests {
         try expect(TextDecoding.decode(Data([0x00, 0x01, 0x02])) == nil, "Binary bytes decoded as a novel")
         let utf32 = Data([0xFF, 0xFE, 0, 0, 0x2D, 0x4E, 0, 0])
         try expect(TextDecoding.decode(utf32) == "中", "UTF-32 BOM mistaken for UTF-16")
+        let encodings = try JSONDecoder().decode([String: String].self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("encodings.json")))
+        for name in encodings.keys.sorted() {
+            let bytes = try Data(contentsOf: fixtures.appendingPathComponent(name))
+            let decoded = TextDecoding.decode(bytes)
+            try expect(decoded == encodings[name], "Encoding mismatch: \(name), decoded: \(String(describing: decoded?.prefix(80)))")
+        }
+        for bytes: [UInt8] in [[0xEF, 0xBB, 0xBF, 0xFF], [0xFF, 0xFE, 0x2D],
+                               [0x81], [0x81, 0x30, 0x81], [0xFF, 0xFF, 0xFF],
+                               [0x41, 0x01, 0x42]] {
+            try expect(TextDecoding.decode(Data(bytes)) == nil, "Malformed text accepted: \(bytes)")
+        }
+        print("PASS: GBK, GB18030, Big5, mixed-language and Unicode encoding fixtures")
         let split = ChapterSplitter.split("第 1 章\n作者写的标题必须保留\n\n第一章 开始\n正文一\n\n第二章 继续\n正文二")
         try expect(split.chapters.map(\.text).joined().contains("第 1 章"), "Author heading was deleted")
         try expect(ChapterSplitter.split("第一章 开始\n正文一\n\n第二章 继续\n正文二").fromHeadings, "Heading pattern failed")

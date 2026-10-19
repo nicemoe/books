@@ -389,11 +389,13 @@ final class BookLibrary {
         defer { importing = nil }
 
         var saved = 0
+        var failures: [String] = []
         for name in fresh.sorted() {
             let url = BookPaths.file(named: name)
             do { _ = try await performImport(from: url); saved += 1 }
-            catch { operationError = "\(name)：\(error.localizedDescription)"; break }
+            catch { failures.append("\(name)：\(error.localizedDescription)") }
         }
+        reportFileFailures(failures)
         return saved
     }
 
@@ -437,14 +439,18 @@ final class BookLibrary {
         defer { importing = nil }
 
         var done = 0
+        var failures: [String] = []
         for (id, name) in stale {
+            defer { importing?.done += 1 }
             // 每轮都重新找一遍：这中间 await 过，books 可能已经变了
             guard let book = book(id), book.sourceName == name else { continue }
             importing?.title = book.title
             let rebuilt: [ChapterMeta]
             do { rebuilt = try await rebuildChapters(for: book) }
-            catch { operationError = "\(book.title)：\(error.localizedDescription)"; break }
-            importing?.done += 1
+            catch {
+                failures.append("\(name)：\(error.localizedDescription)")
+                continue
+            }
             guard let j = books.firstIndex(where: { $0.id == id }) else { continue }
             // 章少了的话，进度可能指着一章已经不存在的地方，夹回范围内
             if books[j].progress.chapterIndex >= rebuilt.count {
@@ -453,8 +459,15 @@ final class BookLibrary {
             }
             done += 1
         }
+        reportFileFailures(failures)
         if done > 0 { saveNow() }
         return done
+    }
+
+    private func reportFileFailures(_ failures: [String]) {
+        guard !failures.isEmpty else { return }
+        let message = "以下文件处理失败，其余文件已继续处理：\n" + failures.joined(separator: "\n")
+        operationError = [operationError, message].compactMap { $0 }.joined(separator: "\n\n")
     }
 
     /// 照着正文重拆一遍，章节表跟着更新。
