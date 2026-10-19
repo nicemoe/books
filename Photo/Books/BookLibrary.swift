@@ -3,6 +3,7 @@ import Observation
 
 private struct BookIndex: Codable {
     var books: [Book] = []
+    var failedFiles: [BookReconciliation.FailedFile] = []
     var settings = ReaderSettings()
     /// 书架布局是书架的偏好，不属于阅读设置，所以单独放一层。
     /// 默认列表：书多起来之后一屏能看到的书名多得多，封面本来就只是配色块。
@@ -15,12 +16,13 @@ private struct BookIndex: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         books = try c.decode([Book].self, forKey: .books)
+        failedFiles = try c.decodeIfPresent([BookReconciliation.FailedFile].self, forKey: .failedFiles) ?? []
         settings = try c.decodeIfPresent(ReaderSettings.self, forKey: .settings) ?? ReaderSettings()
         shelfLayout = try c.decodeIfPresent(ShelfLayout.self, forKey: .shelfLayout) ?? .list
         appearance = try c.decodeIfPresent(AppTheme.self, forKey: .appearance) ?? .system
     }
 
-    enum CodingKeys: String, CodingKey { case books, settings, shelfLayout, appearance }
+    enum CodingKeys: String, CodingKey { case books, failedFiles, settings, shelfLayout, appearance }
 }
 
 @MainActor
@@ -28,6 +30,7 @@ private struct BookIndex: Codable {
 final class BookLibrary {
 
     private(set) var books: [Book] = []
+    private(set) var failedFiles: [BookReconciliation.FailedFile] = []
     var settings = ReaderSettings() {
         didSet { scheduleSave() }
     }
@@ -52,7 +55,7 @@ final class BookLibrary {
     private(set) var importing: ImportProgress?
 
     /// 串行处理文件变更，防止前台事件与导入互相覆盖。
-    private enum FileOperation { case idle, reconciling, importing, rebuilding }
+    private enum FileOperation { case idle, reconciling, importing, rebuilding, deleting }
     @ObservationIgnored private var fileOperation = FileOperation.idle
     private(set) var isAvailable = false
     var operationError: String?
@@ -92,12 +95,14 @@ final class BookLibrary {
                 let data = try Data(contentsOf: BookPaths.indexFile)
                 let index = try Coders.makeDecoder().decode(BookIndex.self, from: data)
                 guard Set(index.books.map(\.id)).count == index.books.count,
-                      index.books.allSatisfy({ !$0.sourceName.isEmpty
-                        && !$0.sourceName.hasPrefix("/")
-                        && !$0.sourceName.split(separator: "/").contains("..") }) else {
+                      Set(index.failedFiles.map(\.id)).count == index.failedFiles.count,
+                      (index.books.map(\.sourceName) + index.failedFiles.map(\.name)).allSatisfy({
+                        !$0.isEmpty && !$0.hasPrefix("/") && !$0.split(separator: "/").contains("..")
+                      }) else {
                     throw LibraryError.invalidChapters
                 }
                 books = index.books
+                failedFiles = index.failedFiles
                 settings = index.settings
                 shelfLayout = index.shelfLayout
                 appearance = index.appearance
@@ -125,7 +130,7 @@ final class BookLibrary {
     private func snapshotForSaving() -> (BookIndex, UInt64) {
         saveTask?.cancel()
         saveRevision += 1
-        return (BookIndex.make(books: books, settings: settings,
+        return (BookIndex.make(books: books, failedFiles: failedFiles, settings: settings,
                               shelfLayout: shelfLayout, appearance: appearance), saveRevision)
     }
 
@@ -378,6 +383,7 @@ final class BookLibrary {
         var added = 0
         var removed = 0
         var rebuilt = 0
+        var parseFailures: [BookReconciliation.FailedFile] = []
     }
 
     /// One scan and one plan for a foreground transition. Planning never rewrites files.
@@ -391,9 +397,10 @@ final class BookLibrary {
                 needsNewSplitRules: $0.format == .txt && $0.splitVersion < ChapterSplitter.version)
         }
         let plan: BookReconciliation.Plan
+        let previousFailures = failedFiles
         do {
             plan = try await Task.detached(priority: .utility) {
-                try BookReconciliation.plan(books: indexed, files: BookDisk.snapshot()) { name in
+                try BookReconciliation.plan(books: indexed, files: BookDisk.snapshot(), failedFiles: previousFailures) { name in
                     try BookFileState.digest(BookPaths.file(named: name))
                 }
             }.value
@@ -406,6 +413,7 @@ final class BookLibrary {
         var failures = plan.failures
         // Commit removals and metadata together before importing can reuse a filename.
         do {
+            failedFiles = plan.retainedFailures
             let removedIDs = Set(plan.removed)
             if !removedIDs.isEmpty {
                 try await Task.detached(priority: .utility) {
@@ -421,7 +429,9 @@ final class BookLibrary {
                     books[i].sourceModifiedAt = stamp.modifiedAt
                 }
             }
-            if !removedIDs.isEmpty || !plan.metadata.isEmpty { try await persistNow() }
+            if !removedIDs.isEmpty || !plan.metadata.isEmpty || failedFiles != previousFailures {
+                try await persistNow()
+            }
         } catch {
             failures.append("保存书库变更失败：\(error.localizedDescription)")
             reportFileFailures(failures)
@@ -437,16 +447,66 @@ final class BookLibrary {
             do {
                 _ = try await rebuildChapters(for: book)
                 result.rebuilt += 1
-            } catch { failures.append("\(book.sourceName)：\(error.localizedDescription)") }
+            } catch {
+                if let failure = recordParseFailure(error, name: book.sourceName, plan: plan) {
+                    result.parseFailures.append(failure)
+                } else { failures.append("\(book.sourceName)：\(error.localizedDescription)") }
+            }
         }
         for name in plan.added {
             do {
                 _ = try await performImport(from: BookPaths.file(named: name))
                 result.added += 1
-            } catch { failures.append("\(name)：\(error.localizedDescription)") }
+            } catch {
+                if let failure = recordParseFailure(error, name: name, plan: plan) {
+                    result.parseFailures.append(failure)
+                } else { failures.append("\(name)：\(error.localizedDescription)") }
+            }
+        }
+        if !result.parseFailures.isEmpty {
+            do { try await persistNow() }
+            catch { failures.append("保存解析失败记录失败：\(error.localizedDescription)") }
         }
         reportFileFailures(failures)
         return result
+    }
+
+    /// Only parser errors block automatic retries. Disk and save errors remain operation errors.
+    private func recordParseFailure(_ error: Error, name: String,
+                                    plan: BookReconciliation.Plan) -> BookReconciliation.FailedFile? {
+        guard error is ImportError || error is EpubParser.EpubError || error is MiniZip.ZipError,
+              let stamp = plan.stamps[name.lowercased()] else { return nil }
+        let failure = BookReconciliation.FailedFile(name: name, stamp: stamp, reason: error.localizedDescription)
+        failedFiles.removeAll { $0.id == failure.id }
+        failedFiles.append(failure)
+        return failure
+    }
+
+    /// Called only after the user confirms the displayed list. Changed files are not deleted.
+    func deleteFailedFiles(_ confirmed: [BookReconciliation.FailedFile]) async throws {
+        try requireEditable()
+        fileOperation = .deleting
+        defer { fileOperation = .idle }
+        var errors: [String] = []
+        for failure in confirmed {
+            guard failedFiles.contains(failure) else { continue }
+            do {
+                let url = BookPaths.file(named: failure.name)
+                guard try BookFileState.remove(url, matching: failure.stamp) else {
+                    failedFiles.removeAll { $0.id == failure.id }
+                    errors.append("\(failure.name)：文件已修改，未删除，将在下次检查时重新解析")
+                    continue
+                }
+                let ids = Set(books.filter { $0.sourceName.lowercased() == failure.id }.map(\.id))
+                books.removeAll { ids.contains($0.id) }
+                if let openBook, ids.contains(openBook.id) { self.openBook = nil }
+                failedFiles.removeAll { $0.id == failure.id }
+                contentRevision += 1
+                for id in ids { try BookDisk.removeIfPresent(BookPaths.chapterFile(for: id)) }
+            } catch { errors.append("\(failure.name)：\(error.localizedDescription)") }
+        }
+        try await persistNow()
+        reportFileFailures(errors)
     }
 
     private func reportFileFailures(_ failures: [String]) {
@@ -643,10 +703,11 @@ final class BookLibrary {
 }
 
 private extension BookIndex {
-    static func make(books: [Book], settings: ReaderSettings,
+    static func make(books: [Book], failedFiles: [BookReconciliation.FailedFile], settings: ReaderSettings,
                      shelfLayout: ShelfLayout, appearance: AppTheme) -> BookIndex {
         var index = BookIndex()
         index.books = books
+        index.failedFiles = failedFiles
         index.settings = settings
         index.shelfLayout = shelfLayout
         index.appearance = appearance

@@ -126,6 +126,46 @@ struct ReaderRegressionTests {
         try expect(migration.rebuilt == [oldRules.id], "Chapter rule migration was skipped")
         print("PASS: 1000-book repeated opens do no content reads; one snapshot separates every change type")
 
+        let parseFailures = [
+            BookReconciliation.FailedFile(name: "broken.txt", stamp: stamp, reason: "无法识别编码"),
+            BookReconciliation.FailedFile(name: indexed[0].name, stamp: stamp, reason: "正文为空")
+        ]
+        let persistedFailures = try Coders.makeDecoder().decode([BookReconciliation.FailedFile].self,
+            from: Coders.makeEncoder().encode(parseFailures))
+        let failedDisk = [BookReconciliation.File(name: "broken.txt", stamp: stamp), disk[0],
+                          BookReconciliation.File(name: "good.txt", stamp: stamp)]
+        for _ in 0..<3 {
+            let skip = try BookReconciliation.plan(books: [indexed[0]], files: failedDisk,
+                failedFiles: persistedFailures) { _ in
+                    throw TestFailure(message: "Unchanged failed file was read again")
+                }
+            try expect(skip.added == ["good.txt"] && skip.rebuilt.isEmpty
+                       && skip.retainedFailures == parseFailures,
+                       "Reopening retried failed parsing or blocked a healthy file")
+        }
+        let replaced = try BookReconciliation.plan(books: [indexed[0]], files: [
+            .init(name: "broken.txt", stamp: currentStamp),
+            .init(name: indexed[0].name, stamp: currentStamp)
+        ], failedFiles: persistedFailures) { _ in "new-content" }
+        try expect(replaced.retainedFailures.isEmpty && replaced.added == ["broken.txt"]
+                   && replaced.rebuilt == [indexed[0].id], "Edited failed files did not become eligible for retry")
+        let deleted = try BookReconciliation.plan(books: [indexed[0]], files: [],
+            failedFiles: persistedFailures) { _ in "unused" }
+        try expect(deleted.retainedFailures.isEmpty && deleted.removed == [indexed[0].id],
+                   "Deleted failures left stale failure records or shelf entries")
+        let deleteURL = fixtures.appendingPathComponent("failed-to-parse.txt")
+        try Data([0x00, 0x01, 0x02]).write(to: deleteURL)
+        let beforeReplacement = try BookFileState.stamp(deleteURL)
+        try Data("修复后的正文".utf8).write(to: deleteURL, options: .atomic)
+        try expect(try !BookFileState.remove(deleteURL, matching: beforeReplacement),
+                   "Deletion confirmation removed a file replaced after parsing")
+        try expect(try Data(contentsOf: deleteURL) == Data("修复后的正文".utf8), "Changed file contents were lost")
+        let confirmedStamp = try BookFileState.stamp(deleteURL)
+        try expect(try BookFileState.remove(deleteURL, matching: confirmedStamp), "Confirmed unchanged file was not deleted")
+        try expect(!FileManager.default.fileExists(atPath: deleteURL.path), "Deleted source remains on disk")
+        try expect(try BookFileState.remove(deleteURL, matching: confirmedStamp), "Already deleted file prevented cleanup")
+        print("PASS: failed parsing survives restart, unchanged failures skipped, changed files retried, confirmed deletion protects replacements")
+
         let uploadText = "正文\r\n--boundary-not-a-separator\r\n结尾"
         let upload = Data(("--boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"book.txt\"\r\n\r\n"
             + uploadText + "\r\n--boundary--\r\n").utf8)

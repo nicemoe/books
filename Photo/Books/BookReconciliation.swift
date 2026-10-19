@@ -2,6 +2,13 @@ import Foundation
 
 /// Decide work from one directory snapshot before mutating any book or file.
 enum BookReconciliation {
+    struct FailedFile: Codable, Equatable, Identifiable {
+        let name: String
+        let stamp: BookFileState.Stamp
+        let reason: String
+        var id: String { name.lowercased() }
+    }
+
     struct File {
         let name: String
         let stamp: BookFileState.Stamp
@@ -22,9 +29,11 @@ enum BookReconciliation {
         var rebuilt: [UUID] = []
         var metadata: [UUID: BookFileState.Stamp] = [:]
         var failures: [String] = []
+        var retainedFailures: [FailedFile] = []
+        var stamps: [String: BookFileState.Stamp] = [:]
     }
 
-    static func plan(books: [IndexedBook], files: [File],
+    static func plan(books: [IndexedBook], files: [File], failedFiles: [FailedFile] = [],
                      digest: (String) throws -> String) throws -> Plan {
         var disk: [String: File] = [:]
         for file in files {
@@ -34,13 +43,19 @@ enum BookReconciliation {
         }
         let known = Set(books.map { $0.name.lowercased() })
         var result = Plan()
-        result.added = files.filter { !known.contains($0.name.lowercased()) }.map(\.name).sorted()
+        result.stamps = disk.mapValues(\.stamp)
+        result.retainedFailures = failedFiles.filter { disk[$0.id]?.stamp == $0.stamp }
+        let blocked = Set(result.retainedFailures.map(\.id))
+        result.added = files.filter {
+            !known.contains($0.name.lowercased()) && !blocked.contains($0.name.lowercased())
+        }.map(\.name).sorted()
         for book in books {
             try Task.checkCancellation()
             guard let file = disk[book.name.lowercased()] else {
                 result.removed.append(book.id)
                 continue
             }
+            guard !blocked.contains(book.name.lowercased()) else { continue }
             if book.needsNewSplitRules || file.stamp.bytes != book.bytes {
                 result.rebuilt.append(book.id)
                 continue

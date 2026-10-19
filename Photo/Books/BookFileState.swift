@@ -18,6 +18,17 @@ enum BookFileState {
         return Stamp(bytes: bytes, modifiedAt: date.timeIntervalSince1970)
     }
 
+    /// The confirmation refers to one file version, not any future file at that path.
+    static func remove(_ url: URL, matching expected: Stamp) throws -> Bool {
+        do {
+            guard try stamp(url) == expected else { return false }
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            return true
+        }
+    }
+
     static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

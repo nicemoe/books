@@ -20,6 +20,7 @@ struct BookshelfView: View {
     @State private var renameText = ""
     @State private var deleting: Book?
     @State private var errorMessage: String?
+    @State private var failedFilePrompt: [BookReconciliation.FailedFile] = []
     @State private var isCollectingFiles = false
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
@@ -76,6 +77,15 @@ struct BookshelfView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    if !library.failedFiles.isEmpty {
+                        Button {
+                            failedFilePrompt = library.failedFiles
+                        } label: {
+                            Label("\(library.failedFiles.count) 个文件解析失败，点击处理", systemImage: "exclamationmark.triangle")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.secondaryLabel)
+                        }
+                    }
                     if library.books.isEmpty {
                         EmptyState(
                             title: "书架是空的",
@@ -93,7 +103,7 @@ struct BookshelfView: View {
                         LazyVGrid(columns: layout.columns, spacing: 22) {
                             ForEach(visibleBooks) { book in
                                 Button {
-                                    openedBook = OpenedBook(id: book.id)
+                                    open(book)
                                 } label: {
                                     BookCard(book: book, side: layout.side)
                                 }
@@ -106,7 +116,7 @@ struct BookshelfView: View {
                         LazyVStack(spacing: 10) {
                             ForEach(visibleBooks) { book in
                                 Button {
-                                    openedBook = OpenedBook(id: book.id)
+                                    open(book)
                                 } label: {
                                     BookRow(book: book)
                                 }
@@ -204,6 +214,20 @@ struct BookshelfView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .alert("删除解析失败的文件？", isPresented: Binding(
+            get: { !failedFilePrompt.isEmpty && errorMessage == nil && openedBook == nil && sheet == nil },
+            set: { if !$0 { failedFilePrompt = [] } }), presenting: failedFilePrompt) { files in
+            Button("删除这 \(files.count) 个文件", role: .destructive) {
+                Task {
+                    do { try await library.deleteFailedFiles(files) }
+                    catch { errorMessage = error.localizedDescription }
+                }
+            }
+            Button("保留文件", role: .cancel) { }
+        } message: { files in
+            Text(files.map { "\($0.name)：\($0.reason)" }.joined(separator: "\n")
+                 + "\n\n删除会移除书库内的这些文件及对应阅读记录。选择保留后，文件未修改时不会再次自动解析，可从书架的失败提示继续处理。")
+        }
         .overlay {
             if let progress = library.importing {
                 ImportingOverlay(progress: progress)
@@ -246,6 +270,7 @@ struct BookshelfView: View {
             }
         }
         let changes = await library.reconcileFiles()
+        if !changes.parseFailures.isEmpty { failedFilePrompt = changes.parseFailures }
         let saved = changes.added
         let gone = changes.removed
         let redone = changes.rebuilt
@@ -256,6 +281,14 @@ struct BookshelfView: View {
                      redone > 0 ? "重新分章 \(redone) 本" : nil].compactMap { $0 }
         toastItem = Toast(icon: "arrow.triangle.2.circlepath",
                           text: parts.joined(separator: "，"))
+    }
+
+    private func open(_ book: Book) {
+        if let failure = library.failedFiles.first(where: { $0.id == book.sourceName.lowercased() }) {
+            failedFilePrompt = [failure]
+        } else {
+            openedBook = OpenedBook(id: book.id)
+        }
     }
 
     private var addMenu: some View {
