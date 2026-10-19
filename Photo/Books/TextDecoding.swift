@@ -16,8 +16,9 @@ enum TextDecoding {
             ([0xFE, 0xFF], .utf16BigEndian)
         ]
         for (bom, encoding) in signatures where data.starts(with: bom) {
-            guard let text = String(data: data.dropFirst(bom.count), encoding: encoding),
-                  isText(text) else { return nil }
+            let payload = data.dropFirst(bom.count)
+            guard let text = String(data: payload, encoding: encoding), isText(text),
+                  text.data(using: encoding, allowLossyConversion: false) == payload else { return nil }
             return text
         }
         if let text = String(data: data, encoding: .utf8), isText(text) { return text }
