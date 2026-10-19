@@ -392,7 +392,7 @@ struct BookCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            BookCover(book: book, width: side)
+            BookCover(book: book, width: side * 0.9, height: side * 0.9 * 1.48)
             Text(book.title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.label)
@@ -413,30 +413,36 @@ struct BookRow: View {
     let book: Book
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            BookCover(book: book, width: 44)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(book.title)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(Theme.label)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Text(book.author.isEmpty ? book.sizeText : book.author)
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondaryLabel)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    if book.progressRatio > 0 {
-                        ProgressView(value: book.progressRatio)
-                            .tint(Theme.secondaryLabel)
-                            .frame(width: 40)
-                    }
-                    Text(book.progressText)
-                        .font(.caption)
-                        .foregroundStyle(Theme.secondaryLabel)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(book.title)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(Theme.label)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Text(book.sizeText)
+                .font(.footnote)
+                .foregroundStyle(Theme.secondaryLabel)
+                .lineLimit(1)
+            HStack(spacing: 8) {
+                if book.progressRatio > 0 {
+                    ProgressView(value: book.progressRatio)
+                        .tint(Theme.secondaryLabel)
+                        .frame(width: 40)
                 }
+                Text(book.progressText)
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondaryLabel)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .padding(.leading, 58)
+        .overlay(alignment: .leading) {
+            // 用文字实际高度确定书封高度，换行和系统字号变化时一起调整。
+            GeometryReader { geometry in
+                BookCover(book: book, width: 44, height: geometry.size.height)
+            }
+            .frame(width: 44)
         }
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) {

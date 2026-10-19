@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 以书名排版为主的平面书封；书架和列表使用同一套设计。
+/// 简洁的平面书封；书名由书架和列表在封面外显示。
 struct BookCover: View {
     let book: Book
     let width: CGFloat
+    let height: CGFloat
 
     private var cornerRadius: CGFloat { width < 72 ? 3 : 6 }
 
@@ -18,14 +19,6 @@ struct BookCover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(book.title)
-                .font(.system(size: width * 0.17, weight: .semibold, design: .serif))
-                .lineSpacing(width * 0.025)
-                .lineLimit(4)
-                .minimumScaleFactor(0.8)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
             Spacer(minLength: width * 0.12)
 
             Rectangle()
@@ -43,7 +36,7 @@ struct BookCover: View {
         .foregroundStyle(Color(hex: 0xFAF6EE))
         .padding(.horizontal, width * 0.14)
         .padding(.vertical, width * 0.17)
-        .frame(width: width, height: width * 1.48)
+        .frame(width: width, height: height, alignment: .bottomLeading)
         .background(coverColor, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
