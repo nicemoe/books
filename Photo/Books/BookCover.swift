@@ -1,72 +1,52 @@
 import SwiftUI
 
-/// 同一套书封用于书架和目录；颜色来自书籍的稳定索引。
+/// 以书名排版为主的平面书封；书架和列表使用同一套设计。
 struct BookCover: View {
     let book: Book
     let width: CGFloat
 
-    private static let papers: [UInt32] = [
-        0xE9DFD0, 0xD7E0D6, 0xD7DFE8, 0xE6D5D2,
-        0xE3DECA, 0xDCD8E4, 0xD1E0DE, 0xE6DCCF
+    private static let colors: [UInt32] = [
+        0x40594E, 0x44566D, 0x8E5651, 0x7C694F,
+        0x3E6168, 0x67576B, 0x686C50, 0x70534C
     ]
-    private var paper: Color {
-        let index = ((book.colorIndex % Self.papers.count) + Self.papers.count) % Self.papers.count
-        return Color(hex: Self.papers[index])
+    private var coverColor: Color {
+        let index = ((book.colorIndex % Self.colors.count) + Self.colors.count) % Self.colors.count
+        return Color(hex: Self.colors[index])
     }
-    private let ink = Color(hex: 0x34332F)
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(Color(hex: 0xF6F2E9))
-                .padding(.leading, 3)
-                .padding(.top, 3)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(book.title)
+                .font(.system(size: width * 0.17, weight: .semibold, design: .serif))
+                .lineSpacing(width * 0.025)
+                .lineLimit(4)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            RoundedRectangle(cornerRadius: 3)
-                .fill(paper)
-                .padding(.trailing, 3)
-                .padding(.bottom, 3)
-
-            Rectangle()
-                .fill(ink.opacity(0.09))
-                .frame(width: max(4, width * 0.055))
-                .padding(.bottom, 3)
+            Spacer(minLength: width * 0.12)
 
             Rectangle()
                 .fill(.white.opacity(0.45))
-                .frame(width: 1)
-                .padding(.leading, max(5, width * 0.065))
-                .padding(.vertical, 4)
+                .frame(width: width * 0.18, height: 1)
 
-            VStack(spacing: width * 0.09) {
-                Text(book.title)
-                    .font(.system(size: width * 0.15, weight: .medium, design: .serif))
-                    .lineLimit(4)
-                    .minimumScaleFactor(0.75)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                Rectangle()
-                    .fill(ink.opacity(0.28))
-                    .frame(width: width * 0.23, height: 1)
-                if !book.author.isEmpty {
-                    Text(book.author)
-                        .font(.system(size: width * 0.075, design: .serif))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                }
-                Spacer(minLength: 0)
-                Text(book.format.label)
-                    .font(.system(size: max(6, width * 0.065), weight: .medium))
-                    .tracking(1.5)
-                    .opacity(0.55)
+            if width >= 72, !book.author.isEmpty {
+                Text(book.author)
+                    .font(.system(size: width * 0.085, weight: .regular, design: .serif))
+                    .lineLimit(1)
+                    .padding(.top, width * 0.08)
+                    .opacity(0.8)
             }
-            .foregroundStyle(ink)
-            .padding(.horizontal, width * 0.14)
-            .padding(.top, width * 0.23)
-            .padding(.bottom, width * 0.13)
         }
-        .frame(width: width, height: width * 1.46)
-        .shadow(color: .black.opacity(0.12), radius: 3, x: 1, y: 3)
+        .foregroundStyle(Color(hex: 0xFAF6EE))
+        .padding(.horizontal, width * 0.14)
+        .padding(.vertical, width * 0.17)
+        .frame(width: width, height: width * 1.48)
+        .background(coverColor, in: RoundedRectangle(cornerRadius: 2))
+        .overlay {
+            RoundedRectangle(cornerRadius: 2)
+                .strokeBorder(.black.opacity(0.08), lineWidth: 0.5)
+        }
         .accessibilityHidden(true)
     }
 }

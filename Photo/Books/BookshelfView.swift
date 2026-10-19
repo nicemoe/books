@@ -413,39 +413,34 @@ struct BookRow: View {
     let book: Book
 
     var body: some View {
-        HStack(alignment: .center, spacing: 18) {
-            BookCover(book: book, width: 64)
-            VStack(alignment: .leading, spacing: 7) {
+        HStack(alignment: .center, spacing: 14) {
+            BookCover(book: book, width: 44)
+            VStack(alignment: .leading, spacing: 5) {
                 Text(book.title)
-                    .font(.system(.headline, design: .serif))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.label)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                if !book.author.isEmpty {
-                    Text(book.author)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryLabel)
-                        .lineLimit(1)
-                }
-                Text(book.sizeText)
+                Text(book.author.isEmpty ? book.sizeText : book.author)
                     .font(.caption)
                     .foregroundStyle(Theme.secondaryLabel)
+                    .lineLimit(1)
                 HStack(spacing: 8) {
                     if book.progressRatio > 0 {
                         ProgressView(value: book.progressRatio)
                             .tint(Theme.secondaryLabel)
-                            .frame(width: 54)
+                            .frame(width: 40)
                     }
                     Text(book.progressText)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(Theme.secondaryLabel)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 17)
+        .padding(.vertical, 12)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, 82)
+            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.leading, 58)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
