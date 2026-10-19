@@ -161,6 +161,9 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.profile_name }}" \
             CODE_SIGN_IDENTITY="${{ steps.signing.outputs.identity }}"
 
+      - name: 检查网页图标格式
+        run: python3 Tools/Checks/check_web_icon.py "$RUNNER_TEMP/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app/WebIcon.png"
+
       - name: 导出 IPA
         id: export
         run: |

@@ -77,6 +77,9 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
+      - name: 检查网页图标格式
+        run: python3 Tools/Checks/check_web_icon.py "$RUNNER_TEMP/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app/WebIcon.png"
+
       - name: 打包成 IPA
         id: package
         run: |
