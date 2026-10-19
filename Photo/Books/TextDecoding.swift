@@ -25,7 +25,9 @@ enum TextDecoding {
         let encodings: [UInt]
         if data.contains(0) {
             // 单字节和中文旧编码中的 NUL 不是正文；仅在 Unicode 范围内识别。
-            encodings = [String.Encoding.utf16LittleEndian.rawValue,
+            guard data.count.isMultiple(of: 2) else { return nil }
+            encodings = [String.Encoding.utf16.rawValue, String.Encoding.utf32.rawValue,
+                         String.Encoding.utf16LittleEndian.rawValue,
                          String.Encoding.utf16BigEndian.rawValue,
                          String.Encoding.utf32LittleEndian.rawValue,
                          String.Encoding.utf32BigEndian.rawValue]
