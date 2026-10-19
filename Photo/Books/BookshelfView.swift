@@ -213,7 +213,8 @@ struct BookshelfView: View {
         // 电脑上把书丢进 Books 文件夹后，回到 App 就收走。
         // 只在切回前台时扫一次——文件是在 App 不活跃的时候放进来的，
         // 常驻监听目录只会白耗电。
-        .task {
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
             if let error = library.operationError { errorMessage = error; library.operationError = nil }
             await collectLooseFiles()
         }
@@ -224,9 +225,7 @@ struct BookshelfView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task { await collectLooseFiles() }
-            } else {
+            if phase != .active {
                 // 退到后台之后人很可能直接上划把 App 杀了。翻页时的保存是
                 // 攒 300ms 一起写的，不趁这一下落盘，最后翻的那几页就没了。
                 library.saveNow()
@@ -246,9 +245,10 @@ struct BookshelfView: View {
                 library.operationError = nil
             }
         }
-        let saved = await library.importLooseFiles()
-        let gone = await library.pruneMissingSources()
-        let redone = await library.refreshEdited()
+        let changes = await library.reconcileFiles()
+        let saved = changes.added
+        let gone = changes.removed
+        let redone = changes.rebuilt
         guard saved > 0 || gone > 0 || redone > 0 else { return }
 
         let parts = [saved > 0 ? "收进 \(saved) 本" : nil,

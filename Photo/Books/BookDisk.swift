@@ -2,17 +2,13 @@ import Foundation
 
 /// 文件操作集中在这里；失败向上抛出，不用空正文或空目录冒充成功。
 enum BookDisk {
-    struct FileStamp {
-        let bytes: Int
-        let modifiedAt: Double
-    }
-
     struct WrittenBook {
         let metas: [ChapterMeta]
         let characters: Int
         let bytes: Int
         let name: String
         let modifiedAt: Double
+        let digest: String
     }
 
     static func removeIfPresent(_ url: URL) throws {
@@ -20,37 +16,30 @@ enum BookDisk {
         catch let error as CocoaError where error.code == .fileNoSuchFile { }
     }
 
-    static func scanLibrary() throws -> [String] {
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+    static func snapshot() throws -> [BookReconciliation.File] {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         var scanError: Error?
         guard let walker = FileManager.default.enumerator(at: BookPaths.root,
             includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles],
             errorHandler: { _, error in scanError = error; return false }) else {
             throw CocoaError(.fileReadUnknown)
         }
-        var names: [String] = []
+        var files: [BookReconciliation.File] = []
         let prefix = BookPaths.root.standardizedFileURL.path + "/"
         for case let url as URL in walker {
             let values = try url.resourceValues(forKeys: keys)
             guard values.isRegularFile == true, values.isSymbolicLink != true,
                   ["txt", "epub"].contains(url.pathExtension.lowercased()),
                   url.standardizedFileURL.path.hasPrefix(prefix) else { continue }
-            names.append(String(url.standardizedFileURL.path.dropFirst(prefix.count)))
-        }
-        if let scanError { throw scanError }
-        return names
-    }
-
-    static func fileStamps() throws -> [String: FileStamp] {
-        var stamps: [String: FileStamp] = [:]
-        for name in try scanLibrary() {
-            let values = try BookPaths.file(named: name).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            guard let bytes = values.fileSize, let date = values.contentModificationDate else {
+            guard let bytes = values.fileSize, let modified = values.contentModificationDate else {
                 throw CocoaError(.fileReadUnknown)
             }
-            stamps[name.lowercased()] = FileStamp(bytes: bytes, modifiedAt: date.timeIntervalSince1970)
+            let name = String(url.standardizedFileURL.path.dropFirst(prefix.count))
+            files.append(BookReconciliation.File(name: name,
+                stamp: BookFileState.Stamp(bytes: bytes, modifiedAt: modified.timeIntervalSince1970)))
         }
-        return stamps
+        if let scanError { throw scanError }
+        return files
     }
 
     static func writeText(chapters: [ParsedChapter], stem: String, replacing source: URL) throws -> WrittenBook {
@@ -79,10 +68,9 @@ enum BookDisk {
             }
         }
         try blob.write(to: target, options: .atomic)
-        let values = try target.resourceValues(forKeys: [.contentModificationDateKey])
-        guard let modified = values.contentModificationDate else { throw CocoaError(.fileReadUnknown) }
+        let stamp = try BookFileState.stamp(target)
         return WrittenBook(metas: metas, characters: characters, bytes: blob.count,
-                           name: name, modifiedAt: modified.timeIntervalSince1970)
+                           name: name, modifiedAt: stamp.modifiedAt, digest: BookFileState.digest(blob))
     }
 
     /// 只有正文和章节表均已写好后，才移除书库内被转换的源文件。

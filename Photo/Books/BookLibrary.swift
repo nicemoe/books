@@ -51,9 +51,9 @@ final class BookLibrary {
     /// nil 表示没有在导入
     private(set) var importing: ImportProgress?
 
-    /// 正在扫书库。挡住重入，见 importLooseFiles。
-    @ObservationIgnored private var isScanning = false
-    @ObservationIgnored private var isImporting = false
+    /// 串行处理文件变更，防止前台事件与导入互相覆盖。
+    private enum FileOperation { case idle, reconciling, importing, rebuilding }
+    @ObservationIgnored private var fileOperation = FileOperation.idle
     private(set) var isAvailable = false
     var operationError: String?
     private(set) var contentRevision: UInt64 = 0
@@ -72,7 +72,7 @@ final class BookLibrary {
 
     private func requireEditable() throws {
         guard isAvailable else { throw LibraryError.unavailable }
-        guard !isScanning, !isImporting else { throw LibraryError.busy }
+        guard fileOperation == .idle else { throw LibraryError.busy }
     }
 
     /// 手上摊开的那本书的章节表。一次只留一本——人不会同时读两本，
@@ -122,12 +122,21 @@ final class BookLibrary {
         }
     }
 
-    func saveNow() {
-        guard isAvailable else { return }
+    private func snapshotForSaving() -> (BookIndex, UInt64) {
         saveTask?.cancel()
         saveRevision += 1
-        let revision = saveRevision
-        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout, appearance: appearance)
+        return (BookIndex.make(books: books, settings: settings,
+                              shelfLayout: shelfLayout, appearance: appearance), saveRevision)
+    }
+
+    private func persistNow() async throws {
+        let (snapshot, revision) = snapshotForSaving()
+        try await writer.write(snapshot, revision: revision)
+    }
+
+    func saveNow() {
+        guard isAvailable else { return }
+        let (snapshot, revision) = snapshotForSaving()
         let writer = writer
         Task { [weak self] in
             do { try await writer.write(snapshot, revision: revision) }
@@ -166,8 +175,8 @@ final class BookLibrary {
             }.value
         } else {
             try requireEditable()
-            isScanning = true
-            defer { isScanning = false }
+            fileOperation = .rebuilding
+            defer { fileOperation = .idle }
             stored = try await rebuildChapters(for: book)
         }
         try Task.checkCancellation()
@@ -178,18 +187,18 @@ final class BookLibrary {
             $0.offset == $0.element.index && $0.element.byteOffset >= 0 && $0.element.byteLength > 0
         }) else { throw LibraryError.invalidChapters }
         openBook = (bookID, stored)
+        var indexChanged = false
         if books[i].sourceModifiedAt == nil {
-            let values = try BookPaths.file(named: book.sourceName).resourceValues(forKeys: [.contentModificationDateKey])
-            guard let modified = values.contentModificationDate else { throw CocoaError(.fileReadUnknown) }
-            books[i].sourceModifiedAt = modified.timeIntervalSince1970
-            saveNow()
+            books[i].sourceModifiedAt = try BookFileState.stamp(BookPaths.file(named: book.sourceName)).modifiedAt
+            indexChanged = true
         }
         if books[i].positionVersion == 0 {
             books[i].positionVersion = 1
             books[i].totalCharacters = stored.reduce(0) { $0 + $1.characterCount }
             books[i].progress.charactersBefore = stored.prefix(max(0, books[i].progress.chapterIndex)).reduce(0) { $0 + $1.characterCount }
-            saveNow()
+            indexChanged = true
         }
+        if indexChanged { try await persistNow() }
         return stored
     }
 
@@ -223,8 +232,8 @@ final class BookLibrary {
     @discardableResult
     func importBook(from url: URL) async throws -> Book {
         try requireEditable()
-        isImporting = true
-        defer { isImporting = false }
+        fileOperation = .importing
+        defer { fileOperation = .idle }
         return try await performImport(from: url)
     }
 
@@ -292,6 +301,7 @@ final class BookLibrary {
                         sourceName: built.name,
                         textBytes: built.bytes,
                         sourceModifiedAt: built.modifiedAt,
+                        sourceDigest: built.digest,
                         positionVersion: 1,
                         author: parsed.author,
                         format: ext == "epub" ? .epub : .txt,
@@ -302,7 +312,7 @@ final class BookLibrary {
                         colorIndex: Int(UInt(bitPattern: parsed.title.hashValue) % UInt(Theme.paletteHex.count)))
 
         books.append(book)
-        saveNow()
+        try await persistNow()
         return book
     }
 
@@ -331,8 +341,8 @@ final class BookLibrary {
         guard !urls.isEmpty else { return (0, []) }
         do { try requireEditable() }
         catch { return (0, [error.localizedDescription]) }
-        isImporting = true
-        defer { isImporting = false }
+        fileOperation = .importing
+        defer { fileOperation = .idle }
         importing = ImportProgress(done: 0, total: urls.count, title: "")
         defer { importing = nil }
 
@@ -364,104 +374,79 @@ final class BookLibrary {
         try? FileManager.default.removeItem(at: url)
     }
 
-    /// 收书库里还没收过的书。
-    ///
-    /// 「哪些是新的」是拿索引对出来的：每本书都记着自己的正文文件叫什么
-    /// （sourceName），书库里对不上号的就是新拖进来的。不用比文件数——
-    /// 比数不可靠，删一个加一个数字还一样。
-    func importLooseFiles() async -> Int {
-        // 两个触发点（视图首次出现、从后台切回前台）可能挨着来。不挡一下的话
-        // 两次扫描会看到同一批新文件，各自导一遍，同一本书出现两条。
-        guard isAvailable, !isScanning, !isImporting else { return 0 }
-        isScanning = true
-        defer { isScanning = false }
-
-        let known = Set(books.map(\.sourceName).filter { !$0.isEmpty }.map { $0.lowercased() })
-        // 扫盘甩到后台：一千个文件走一遍目录树也要点时间
-        let all: [String]
-        do { all = try await Task.detached(priority: .utility) { try Self.scanLibrary() }.value }
-        catch { operationError = error.localizedDescription; return 0 }
-        let fresh = all.filter { !known.contains($0.lowercased()) }
-        guard !fresh.isEmpty else { return 0 }
-
-        // 先把总数摆出来再开工，不然一千本书就是干等着，不知道到哪了
-        importing = ImportProgress(done: 0, total: fresh.count, title: "")
-        defer { importing = nil }
-
-        var saved = 0
-        var failures: [String] = []
-        for name in fresh.sorted() {
-            let url = BookPaths.file(named: name)
-            do { _ = try await performImport(from: url); saved += 1 }
-            catch { failures.append("\(name)：\(error.localizedDescription)") }
-        }
-        reportFileFailures(failures)
-        return saved
+    struct ReconcileResult {
+        var added = 0
+        var removed = 0
+        var rebuilt = 0
     }
 
-    /// 该重拆的书重拆一遍：在访达里改过的，以及按老规则拆的。
-    ///
-    /// 章节记的是字节范围，而正文文件就摆在共享目录里，人随时能打开改两笔。
-    /// 一改，后面每一章的偏移就整体错位，而且是静悄悄地错——点开某一章，
-    /// 读出来是上一章的半句话。所以每次对账都拿文件大小校一下，对不上就重拆。
-    ///
-    /// 阅读进度和书签留着：那是人自己的东西，不是从文件生成的。章数变少了
-    /// 就把进度夹回范围内，总比整本回到第一页强。
-    @discardableResult
-    func refreshEdited() async -> Int {
-        // 和 importLooseFiles 共用一把锁：两个触发点挨着来的话，
-        // 后一次会看到前一次还没写回 textBytes 的书，白重拆一遍。
-        guard isAvailable, !isScanning, !isImporting else { return 0 }
-        isScanning = true
-        defer { isScanning = false }
-
-        let sizes: [String: BookDisk.FileStamp]
-        do { sizes = try await Task.detached(priority: .utility) { try BookDisk.fileStamps() }.value }
-        catch { operationError = error.localizedDescription; return 0 }
-        let stale: [(id: UUID, name: String)] = books.compactMap { book in
-            guard !book.sourceName.isEmpty else { return nil }
-            // 一、分章规则比这本书拆的时候新了。
-            //
-            // 章节表是导入那一刻算出来存下的，规则改进了它不会自己变好。
-            // 头一版规则其实整个编译不过，所有书都是按字数硬切的，
-            // 标题全是「第 N 节」——那一批全靠这条捞回来。
-            if book.format == .txt && book.splitVersion < ChapterSplitter.version { return (book.id, book.sourceName) }
-            // 二、文件在电脑上被改过，偏移全不作数了
-            guard book.textBytes > 0,
-                  let stamp = sizes[book.sourceName.lowercased()],
-                  stamp.bytes != book.textBytes || (book.sourceModifiedAt != nil && stamp.modifiedAt != book.sourceModifiedAt)
-            else { return nil }
-            return (book.id, book.sourceName)
+    /// One scan and one plan for a foreground transition. Planning never rewrites files.
+    func reconcileFiles() async -> ReconcileResult {
+        guard isAvailable, fileOperation == .idle else { return ReconcileResult() }
+        fileOperation = .reconciling
+        defer { fileOperation = .idle; importing = nil }
+        let indexed = books.map {
+            BookReconciliation.IndexedBook(id: $0.id, name: $0.sourceName,
+                bytes: $0.textBytes, modifiedAt: $0.sourceModifiedAt, digest: $0.sourceDigest,
+                needsNewSplitRules: $0.format == .txt && $0.splitVersion < ChapterSplitter.version)
         }
-        guard !stale.isEmpty else { return 0 }
+        let plan: BookReconciliation.Plan
+        do {
+            plan = try await Task.detached(priority: .utility) {
+                try BookReconciliation.plan(books: indexed, files: BookDisk.snapshot()) { name in
+                    try BookFileState.digest(BookPaths.file(named: name))
+                }
+            }.value
+        } catch {
+            operationError = "检查书库失败：\(error.localizedDescription)"
+            return ReconcileResult()
+        }
 
-        importing = ImportProgress(done: 0, total: stale.count, title: "")
-        defer { importing = nil }
+        var result = ReconcileResult()
+        var failures = plan.failures
+        // Commit removals and metadata together before importing can reuse a filename.
+        do {
+            let removedIDs = Set(plan.removed)
+            if !removedIDs.isEmpty {
+                try await Task.detached(priority: .utility) {
+                    for id in removedIDs { try BookDisk.removeIfPresent(BookPaths.chapterFile(for: id)) }
+                }.value
+                books.removeAll { removedIDs.contains($0.id) }
+                if let openBook, removedIDs.contains(openBook.id) { self.openBook = nil }
+                result.removed = removedIDs.count
+                contentRevision += 1
+            }
+            for i in books.indices {
+                if let stamp = plan.metadata[books[i].id] {
+                    books[i].sourceModifiedAt = stamp.modifiedAt
+                }
+            }
+            if !removedIDs.isEmpty || !plan.metadata.isEmpty { try await persistNow() }
+        } catch {
+            failures.append("保存书库变更失败：\(error.localizedDescription)")
+            reportFileFailures(failures)
+            return result
+        }
 
-        var done = 0
-        var failures: [String] = []
-        for (id, name) in stale {
+        let total = plan.added.count + plan.rebuilt.count
+        if total > 0 { importing = ImportProgress(done: 0, total: total, title: "") }
+        for id in plan.rebuilt {
             defer { importing?.done += 1 }
-            // 每轮都重新找一遍：这中间 await 过，books 可能已经变了
-            guard let book = book(id), book.sourceName == name else { continue }
+            guard let book = book(id) else { continue }
             importing?.title = book.title
-            let rebuilt: [ChapterMeta]
-            do { rebuilt = try await rebuildChapters(for: book) }
-            catch {
-                failures.append("\(name)：\(error.localizedDescription)")
-                continue
-            }
-            guard let j = books.firstIndex(where: { $0.id == id }) else { continue }
-            // 章少了的话，进度可能指着一章已经不存在的地方，夹回范围内
-            if books[j].progress.chapterIndex >= rebuilt.count {
-                books[j].progress = ReadingProgress(
-                    chapterIndex: max(0, rebuilt.count - 1), updatedAt: books[j].progress.updatedAt)
-            }
-            done += 1
+            do {
+                _ = try await rebuildChapters(for: book)
+                result.rebuilt += 1
+            } catch { failures.append("\(book.sourceName)：\(error.localizedDescription)") }
+        }
+        for name in plan.added {
+            do {
+                _ = try await performImport(from: BookPaths.file(named: name))
+                result.added += 1
+            } catch { failures.append("\(name)：\(error.localizedDescription)") }
         }
         reportFileFailures(failures)
-        if done > 0 { saveNow() }
-        return done
+        return result
     }
 
     private func reportFileFailures(_ failures: [String]) {
@@ -497,6 +482,7 @@ final class BookLibrary {
         books[i].sourceName = built.name
         books[i].textBytes = built.bytes
         books[i].sourceModifiedAt = built.modifiedAt
+        books[i].sourceDigest = built.digest
         books[i].positionVersion = 1
         books[i].chapterCount = built.metas.count
         books[i].hasRealChapters = fromHeadings
@@ -508,7 +494,7 @@ final class BookLibrary {
         books[i].progress.charactersBefore = built.metas.prefix(chapter).reduce(0) { $0 + $1.characterCount }
         if openBook?.id == bookID { openBook = (bookID, built.metas) }
         contentRevision += 1
-        saveNow()
+        try await persistNow()
         return built.metas
     }
 
@@ -520,41 +506,6 @@ final class BookLibrary {
 
     nonisolated private static func readChapters(bookID: UUID) throws -> [ChapterMeta] {
         try Coders.makeDecoder().decode([ChapterMeta].self, from: Data(contentsOf: BookPaths.chapterFile(for: bookID)))
-    }
-
-    /// 正文文件在书库里被删掉了，书也跟着走。
-    ///
-    /// 那个文件就是这本书本身，索引里存的偏移全指着它。文件没了，
-    /// 剩下的章节目录只是一堆指向空气的字节范围，点开是白的。
-    ///
-    /// sourceName 是空串的跳过：那种书压根没记文件是哪个，
-    /// 无从判断在不在，不能拿「找不到」当「被删了」。
-    @discardableResult
-    func pruneMissingSources() async -> Int {
-        guard isAvailable, !isScanning, !isImporting else { return 0 }
-        isScanning = true
-        defer { isScanning = false }
-        let names: [String]
-        do { names = try await Task.detached(priority: .utility) { try Self.scanLibrary() }.value }
-        catch { operationError = error.localizedDescription; return 0 }
-        let onDisk = Set(names.map { $0.lowercased() })
-        let doomed = books.filter { !$0.sourceName.isEmpty
-            && !onDisk.contains($0.sourceName.lowercased()) }
-        guard !doomed.isEmpty else { return 0 }
-
-        let doomedIDs = Set(doomed.map(\.id))
-        for id in doomedIDs {
-            do { try BookDisk.removeIfPresent(BookPaths.chapterFile(for: id)) }
-            catch { operationError = error.localizedDescription; return 0 }
-        }
-        if let openBook, doomedIDs.contains(openBook.id) { self.openBook = nil }
-        books.removeAll { doomedIDs.contains($0.id) }
-        saveNow()
-        return doomed.count
-    }
-
-    nonisolated private static func scanLibrary() throws -> [String] {
-        try BookDisk.scanLibrary()
     }
 
     // MARK: 全文搜索

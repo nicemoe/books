@@ -124,6 +124,7 @@ struct Book: Identifiable, Codable, Hashable {
     /// 大小对不上就说明索引里那套偏移已经不作数了，得重新拆一遍。
     var textBytes: Int = 0
     var sourceModifiedAt: Double?
+    var sourceDigest: String?
     var positionVersion: Int = 0
     var author: String = ""
     var format: BookFormat
@@ -149,7 +150,7 @@ struct Book: Identifiable, Codable, Hashable {
 
     init(id: UUID = UUID(), title: String,
          sourceName: String = "", textBytes: Int = 0,
-         sourceModifiedAt: Double? = nil, positionVersion: Int = 0,
+         sourceModifiedAt: Double? = nil, sourceDigest: String? = nil, positionVersion: Int = 0,
          author: String = "", format: BookFormat,
          addedAt: Date = Date(), chapterCount: Int = 0,
          hasRealChapters: Bool = true, splitVersion: Int = 0,
@@ -161,6 +162,7 @@ struct Book: Identifiable, Codable, Hashable {
         self.sourceName = sourceName
         self.textBytes = textBytes
         self.sourceModifiedAt = sourceModifiedAt
+        self.sourceDigest = sourceDigest
         self.positionVersion = positionVersion
         self.author = author
         self.format = format
@@ -184,6 +186,7 @@ struct Book: Identifiable, Codable, Hashable {
         sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName) ?? ""
         textBytes = try c.decodeIfPresent(Int.self, forKey: .textBytes) ?? 0
         sourceModifiedAt = try c.decodeIfPresent(Double.self, forKey: .sourceModifiedAt)
+        sourceDigest = try c.decodeIfPresent(String.self, forKey: .sourceDigest)
         positionVersion = try c.decodeIfPresent(Int.self, forKey: .positionVersion) ?? 0
         author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt

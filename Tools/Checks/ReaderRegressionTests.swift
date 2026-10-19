@@ -66,6 +66,66 @@ struct ReaderRegressionTests {
         try expect(ChapterSplitter.split("第一章 开始\n正文一\n\n第二章 继续\n正文二").fromHeadings, "Heading pattern failed")
         print("PASS: Unicode offsets, exact chapter reads, text decoding and author text preservation")
 
+        // Reopening must not confuse a metadata-only change with a changed novel.
+        let bookURL = fixtures.appendingPathComponent("file-state.txt")
+        let original = Data("第一章\n原来的正文".utf8)
+        try original.write(to: bookURL, options: .atomic)
+        let recorded = try BookFileState.stamp(bookURL)
+        let fingerprint = BookFileState.digest(original)
+        let savedFingerprint = try Coders.makeEncoder().encode(fingerprint)
+        try expect(try BookFileState.digest(bookURL) == Coders.makeDecoder().decode(String.self, from: savedFingerprint),
+                   "Fingerprint changed after saving and reopening")
+        let savedStamp = try Coders.makeEncoder().encode(recorded)
+        try expect(try Coders.makeDecoder().decode(BookFileState.Stamp.self, from: savedStamp) == BookFileState.stamp(bookURL),
+                   "Unchanged file stamp changed after index round trip")
+        var cachedURL = bookURL
+        _ = try cachedURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: recorded.modifiedAt + 10)], ofItemAtPath: bookURL.path)
+        let touched = try BookFileState.stamp(cachedURL)
+        try expect(touched.modifiedAt != recorded.modifiedAt, "File stamp reused cached modification date")
+        try expect(try BookFileState.digest(bookURL) == fingerprint, "Metadata-only change invalidated chapter content")
+        let edited = Data("第一章\n修改的正文".utf8)
+        try expect(edited.count == original.count, "Same-size edit fixture is invalid")
+        try edited.write(to: bookURL, options: .atomic)
+        try expect(try BookFileState.digest(bookURL) != fingerprint, "Same-size content edit was ignored")
+        try expect(try BookFileState.digest(bookURL) == BookFileState.digest(edited), "Streaming and import digests differ")
+        print("PASS: persisted file stamps, fresh metadata, unchanged content and same-size edits")
+
+        let stamp = BookFileState.Stamp(bytes: 120, modifiedAt: 1234.125)
+        let indexed = (0..<1000).map { index in
+            BookReconciliation.IndexedBook(id: UUID(), name: "book-\(index).txt",
+                bytes: stamp.bytes, modifiedAt: stamp.modifiedAt, digest: "digest-\(index)", needsNewSplitRules: false)
+        }
+        let disk = indexed.map { BookReconciliation.File(name: $0.name, stamp: stamp) }
+        for _ in 0..<3 {
+            let unchanged = try BookReconciliation.plan(books: indexed, files: disk) { _ in
+                throw TestFailure(message: "Unchanged book content was read during a foreground scan")
+            }
+            try expect(unchanged.added.isEmpty && unchanged.removed.isEmpty && unchanged.rebuilt.isEmpty
+                       && unchanged.metadata.isEmpty && unchanged.failures.isEmpty,
+                       "Reopening unchanged library scheduled work")
+        }
+        let currentStamp = BookFileState.Stamp(bytes: 120, modifiedAt: 5678)
+        let changedDisk = [BookReconciliation.File(name: indexed[0].name, stamp: currentStamp),
+                           BookReconciliation.File(name: indexed[1].name, stamp: currentStamp),
+                           BookReconciliation.File(name: "new.txt", stamp: stamp)]
+        let changes = try BookReconciliation.plan(books: Array(indexed.prefix(3)), files: changedDisk) { name in
+            name == indexed[0].name ? "digest-0" : "changed"
+        }
+        try expect(changes.added == ["new.txt"] && changes.removed == [indexed[2].id]
+                   && changes.rebuilt == [indexed[1].id] && changes.metadata[indexed[0].id] == currentStamp,
+                   "Single snapshot failed to distinguish added, deleted, edited and touched books")
+        let failedRead = try BookReconciliation.plan(books: [indexed[0]], files: [changedDisk[0]]) { _ in
+            throw CocoaError(.fileReadNoPermission)
+        }
+        try expect(failedRead.failures.count == 1 && failedRead.rebuilt.isEmpty && failedRead.removed.isEmpty,
+                   "Read failure was treated as a deletion or permission to rewrite")
+        let oldRules = BookReconciliation.IndexedBook(id: UUID(), name: "old.txt", bytes: stamp.bytes,
+            modifiedAt: stamp.modifiedAt, digest: "old", needsNewSplitRules: true)
+        let migration = try BookReconciliation.plan(books: [oldRules], files: [.init(name: oldRules.name, stamp: stamp)]) { _ in "old" }
+        try expect(migration.rebuilt == [oldRules.id], "Chapter rule migration was skipped")
+        print("PASS: 1000-book repeated opens do no content reads; one snapshot separates every change type")
+
         let uploadText = "正文\r\n--boundary-not-a-separator\r\n结尾"
         let upload = Data(("--boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"book.txt\"\r\n\r\n"
             + uploadText + "\r\n--boundary--\r\n").utf8)
@@ -98,6 +158,11 @@ struct ReaderRegressionTests {
             try await unavailable.write(Snapshot(value: 1), revision: 1)
             throw TestFailure(message: "Write failure was ignored")
         } catch is CocoaError { }
+        try FileManager.default.createDirectory(at: fixtures.appendingPathComponent("missing"), withIntermediateDirectories: true)
+        try await unavailable.write(Snapshot(value: 1), revision: 1)
+        let retried = try JSONDecoder().decode(Snapshot.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("missing/index.json")))
+        try expect(retried.value == 1, "Failed write incorrectly consumed the snapshot revision")
         print("PASS: ordered snapshots and explicit write errors")
     }
 }

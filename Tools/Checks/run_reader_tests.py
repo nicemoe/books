@@ -73,7 +73,8 @@ def main():
         raise SystemExit('Swift compiler required. Run on macOS with Xcode installed.')
     sources = ['Photo/Books/MiniZip.swift', 'Photo/Books/EpubParser.swift',
                'Photo/Books/TextDecoding.swift', 'Photo/Books/ChapterSplitter.swift',
-               'Photo/Books/BookText.swift', 'Photo/Core/Storage.swift',
+               'Photo/Books/BookText.swift', 'Photo/Books/BookFileState.swift',
+               'Photo/Books/BookReconciliation.swift', 'Photo/Core/Storage.swift',
                'Photo/Core/SnapshotWriter.swift', 'Photo/Server/HTTPTypes.swift',
                'Tools/Checks/ReaderRegressionTests.swift']
     with tempfile.TemporaryDirectory(prefix='reader-tests-') as temporary:

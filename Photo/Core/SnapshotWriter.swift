@@ -9,7 +9,7 @@ actor SnapshotWriter {
 
     func write<Value: Encodable>(_ value: Value, revision: UInt64) throws {
         guard revision > latestRevision else { return }
-        latestRevision = revision
         try Coders.makeEncoder().encode(value).write(to: url, options: .atomic)
+        latestRevision = revision
     }
 }
