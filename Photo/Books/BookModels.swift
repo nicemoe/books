@@ -377,7 +377,7 @@ enum ShelfLayout: String, Codable, CaseIterable, Identifiable {
 }
 
 struct ReaderSettings: Codable, Hashable {
-    var fontSize: Double = 19
+    var fontSize: Double = 16
     var lineSpacing: Double = 9
     var margin: Double = 22
     var font: ReaderFont = .system
@@ -402,7 +402,7 @@ struct ReaderSettings: Codable, Hashable {
     /// 连带整个 BookIndex 解不出来，用户的书架会被清空。
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 19
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 16
         lineSpacing = try c.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? 9
         margin = try c.decodeIfPresent(Double.self, forKey: .margin) ?? 22
         font = try c.decodeIfPresent(ReaderFont.self, forKey: .font) ?? .system
