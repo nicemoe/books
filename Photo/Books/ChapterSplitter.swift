@@ -31,7 +31,8 @@ enum ChapterSplitter {
     ///    一行都没清着，等于空转。
     /// 5：认「第一章 XXX……」后面直接跟正文、一行写到底的那种。
     /// 6：找边界和取名字拆成两步，正则只管找编号。
-    static let version = 6
+    /// 7：保留短开篇及原文中形似历史编号的标题行。
+    static let version = 7
 
     /// 编号。一行开头的「第一章」「楔子」「Chapter 1」这些。
     ///
@@ -173,7 +174,7 @@ enum ChapterSplitter {
         if let first = headings.first, first.lowerBound > text.startIndex {
             let intro = String(text[text.startIndex..<first.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if intro.count > 30 {
+            if !intro.isEmpty {
                 result.append(ParsedChapter(title: "开篇", text: intro))
             }
         }
