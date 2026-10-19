@@ -6,6 +6,10 @@ enum BookText {
         guard offset >= 0, length > 0 else { throw CocoaError(.fileReadCorruptFile) }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
+        let size = try handle.seekToEnd()
+        guard UInt64(offset) <= size, UInt64(length) <= size - UInt64(offset) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
         try handle.seek(toOffset: UInt64(offset))
         guard let data = try handle.read(upToCount: length), data.count == length,
               let text = String(data: data, encoding: .utf8) else {

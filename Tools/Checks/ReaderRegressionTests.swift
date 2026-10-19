@@ -5,7 +5,7 @@ func expect(_ condition: Bool, _ message: String) throws {
     if !condition { throw TestFailure(message: message) }
 }
 func expectFailure(_ message: String, _ operation: () throws -> Void) throws {
-    do { try operation }
+    do { try operation() }
     catch { return }
     throw TestFailure(message: message)
 }

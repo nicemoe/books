@@ -465,7 +465,6 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
     private func stopAutoScroll() {
         displayLink?.invalidate()
         displayLink = nil
-        report(force: true)
     }
 
     @objc private func step(_ link: CADisplayLink) {
@@ -491,6 +490,7 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
         let atLastChapter = items.last?.chapter == chapterTitles.count - 1
         if y >= maxY, atLastChapter {
             collectionView.setContentOffset(CGPoint(x: 0, y: maxY), animated: false)
+            report(force: true)
             isAutoScrolling = false
             onReachEnd?()
             return
