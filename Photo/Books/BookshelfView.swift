@@ -396,8 +396,8 @@ struct BookCard: View {
             Text(book.title)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.label)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Text(book.progressText)
                 .font(.caption)
                 .foregroundStyle(Theme.secondaryLabel)
@@ -417,8 +417,8 @@ struct BookRow: View {
             Text(book.title)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(Theme.label)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Text(book.sizeText)
                 .font(.footnote)
                 .foregroundStyle(Theme.secondaryLabel)
@@ -438,7 +438,7 @@ struct BookRow: View {
         .padding(.vertical, 4)
         .padding(.leading, 58)
         .overlay(alignment: .leading) {
-            // 用文字实际高度确定书封高度，换行和系统字号变化时一起调整。
+            // 用文字实际高度确定书封高度，随系统字号一起调整。
             GeometryReader { geometry in
                 BookCover(book: book, width: 44, height: geometry.size.height)
             }
