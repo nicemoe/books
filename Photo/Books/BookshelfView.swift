@@ -406,7 +406,7 @@ struct BookRow<MenuItems: View>: View {
     let book: Book
     @ViewBuilder var menu: MenuItems
     @ScaledMetric(relativeTo: .callout) private var titleSize: CGFloat = 18
-    @ScaledMetric(relativeTo: .callout) private var coverWidth: CGFloat = 48
+    @ScaledMetric(relativeTo: .callout) private var coverWidth: CGFloat = 52
 
     private static var verticalPadding: CGFloat { 12 }
     private var textInset: CGFloat { coverWidth + 14 }
