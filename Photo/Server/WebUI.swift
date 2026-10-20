@@ -36,7 +36,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;border:0;background:
 
 header{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line)}
 .hbar{display:flex;align-items:center;gap:12px;height:60px}
-.logo{width:32px;height:32px;flex:none;line-height:0}
+.logo{width:32px;height:32px;flex:none;line-height:0;border-radius:7px;overflow:hidden}
 .logo img{width:32px;height:32px;display:block}
 .htitle{font-weight:700;font-size:16.5px;letter-spacing:-.2px}
 .hsub{font-size:12.5px;color:var(--sub);margin-top:1px}
